@@ -51,7 +51,7 @@ jobs:
       TF_VAR_cluster_oidc_issuer_url: ${{ vars.EKS_OIDC_ISSUER_URL }}
     steps:
       - name: Check out exact workflow ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Validate immutable production inputs
         run: python scripts/validate_production_plan_inputs.py
