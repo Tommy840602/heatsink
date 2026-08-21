@@ -30,6 +30,7 @@ def run_openfoam_smoke(
     case = prepare_openfoam_case(
         OpenFoamCaseRequest(
             design=request.design,
+            mesh_profile=request.mesh_profile,
             heat_load_w=request.heat_load_w,
             ambient_temperature_c=request.ambient_temperature_c,
             run_solver=False,
@@ -128,6 +129,7 @@ def run_openfoam_smoke(
     result = {
         "smoke_id": smoke_id,
         "case_id": case_id,
+        "mesh_profile": request.mesh_profile,
         "contract_version": SMOKE_CONTRACT_VERSION,
         "status": (
             "passed"

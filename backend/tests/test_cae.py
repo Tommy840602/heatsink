@@ -57,6 +57,8 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert manifest["boundary_conditions"]["inlet_velocity_m_s"] == 2.8
         assert "closed fused" in manifest["geometry_contract"]
         assert manifest["mesh_strategy"]["target_cells_through_fin_thickness"] == 2
+        assert manifest["mesh_profile"] == "medium"
+        assert manifest["mesh_strategy"]["resolution_factor"] == 1
         assert manifest["mesh_strategy"]["per_region_quality_required"] is True
         assert manifest["field_contract"]["smoke_solve_only"] is True
         assert manifest["field_contract"]["production_solve_supported"] is True
@@ -100,3 +102,35 @@ def test_openfoam_request_reports_missing_solver_instead_of_fabricating_output(t
     assert result["solver_status"] == "solver_unavailable"
     assert result["solver_executed"] is False
     assert result["results_available"] is False
+
+
+def test_mesh_profiles_are_distinct_traceable_case_fingerprints(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    design = DesignParameters(
+        fin_count=20,
+        fin_thickness=0.5,
+        fin_height=30,
+        fin_spacing=1.5,
+        air_velocity=2.0,
+    )
+
+    coarse = prepare_openfoam_case(
+        OpenFoamCaseRequest(design=design, mesh_profile="coarse"), repository
+    )
+    fine = prepare_openfoam_case(
+        OpenFoamCaseRequest(design=design, mesh_profile="fine"), repository
+    )
+
+    assert coarse["case_id"] != fine["case_id"]
+    with zipfile.ZipFile(
+        repository.cae_artifact_path(coarse["case_id"], f'{coarse["case_id"]}.zip')
+    ) as coarse_archive, zipfile.ZipFile(
+        repository.cae_artifact_path(fine["case_id"], f'{fine["case_id"]}.zip')
+    ) as fine_archive:
+        coarse_manifest = json.loads(coarse_archive.read("case.json"))
+        fine_manifest = json.loads(fine_archive.read("case.json"))
+    assert coarse_manifest["mesh_strategy"]["resolution_factor"] == 0.8
+    assert fine_manifest["mesh_strategy"]["resolution_factor"] == 1.25
+    assert coarse_manifest["mesh_strategy"]["background_cells"]["y"] < fine_manifest[
+        "mesh_strategy"
+    ]["background_cells"]["y"]

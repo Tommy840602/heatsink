@@ -36,7 +36,12 @@ def run_openfoam_mesh(
 ) -> dict[str, Any]:
     repository = repository or ArtifactRepository()
     case = prepare_openfoam_case(
-        OpenFoamCaseRequest(design=request.design, run_solver=False), repository
+        OpenFoamCaseRequest(
+            design=request.design,
+            mesh_profile=request.mesh_profile,
+            run_solver=False,
+        ),
+        repository,
     )
     case_id = case["case_id"]
     mesh_run_id = repository.version(
@@ -85,6 +90,7 @@ def run_openfoam_mesh(
     result = {
         "mesh_run_id": mesh_run_id,
         "case_id": case_id,
+        "mesh_profile": request.mesh_profile,
         "status": (
             "passed"
             if mesh_validated

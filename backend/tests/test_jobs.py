@@ -31,6 +31,22 @@ class FakeQueue:
             "error": None,
         }
 
+    def cancel(self, job_id):
+        return {
+            "job_id": job_id,
+            "task": "cae_campaign",
+            "status": "started",
+            "created_at": None,
+            "started_at": None,
+            "ended_at": None,
+            "result": None,
+            "error": None,
+            "progress": 40,
+            "stage": "cancel_requested",
+            "queue": CAE_QUEUE_NAME,
+            "cancel_requested": True,
+        }
+
 
 def test_job_api_returns_202_and_exposes_completed_result():
     app.dependency_overrides[get_job_queue] = lambda: FakeQueue()
@@ -43,6 +59,11 @@ def test_job_api_returns_202_and_exposes_completed_result():
         finished = client.get("/api/v1/jobs/job_test123")
         assert finished.status_code == 200
         assert finished.json()["result"]["results_available"] is False
+
+        cancelled = client.post("/api/v1/jobs/job_test123/cancel")
+        assert cancelled.status_code == 202
+        assert cancelled.json()["cancel_requested"] is True
+        assert cancelled.json()["stage"] == "cancel_requested"
     finally:
         app.dependency_overrides.clear()
 
@@ -53,4 +74,6 @@ def test_cae_benchmark_isolated_queue_routing():
     assert queue_name_for_task("cae_mesh") == CAE_QUEUE_NAME
     assert queue_name_for_task("cae_smoke") == CAE_QUEUE_NAME
     assert queue_name_for_task("cae_solve") == CAE_QUEUE_NAME
+    assert queue_name_for_task("cae_campaign") == CAE_QUEUE_NAME
+    assert queue_name_for_task("cae_mesh_study") == CAE_QUEUE_NAME
     assert queue_name_for_task("phase1") == DEFAULT_QUEUE_NAME

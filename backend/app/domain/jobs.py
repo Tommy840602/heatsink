@@ -11,6 +11,8 @@ class JobCreateRequest(BaseModel):
         "cae_mesh",
         "cae_smoke",
         "cae_solve",
+        "cae_campaign",
+        "cae_mesh_study",
         "cae_benchmark",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -28,3 +30,4 @@ class JobSnapshot(BaseModel):
     progress: int = Field(default=0, ge=0, le=100)
     stage: str = "queued"
     queue: str = "thermoform"
+    cancel_requested: bool = False

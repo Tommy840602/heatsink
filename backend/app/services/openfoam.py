@@ -15,7 +15,7 @@ from app.services.cad import generate_cad
 from app.services.openfoam_thermal_case import thermal_case_files
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v9"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v10"
 
 
 def mesh_required_commands() -> list[str]:
@@ -37,6 +37,9 @@ def _required_commands(solver: str) -> list[str]:
 
 def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[str, str]:
     design = request.design
+    mesh_factor = {"coarse": 0.8, "medium": 1.0, "fine": 1.25}[
+        request.mesh_profile
+    ]
     width_m = max(
         0.12,
         (design.fin_count * design.fin_thickness + (design.fin_count - 1) * design.fin_spacing + 4) / 1000,
@@ -52,18 +55,26 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
         "z_min": -0.005,
         "z_max": height_m + 0.03,
     }
-    y_background_target_m = design.fin_thickness * 2 / 1000
+    y_background_target_m = design.fin_thickness * 2 / 1000 / mesh_factor
     cells = {
-        "x": max(36, round((domain["x_max"] - domain["x_min"]) / 0.003)),
+        "x": max(
+            36,
+            round((domain["x_max"] - domain["x_min"]) / 0.003 * mesh_factor),
+        ),
         "y": max(
             30, round((domain["y_max"] - domain["y_min"]) / y_background_target_m)
         ),
-        "z": max(24, round((domain["z_max"] - domain["z_min"]) / 0.002)),
+        "z": max(
+            24,
+            round((domain["z_max"] - domain["z_min"]) / 0.002 * mesh_factor),
+        ),
     }
     manifest = {
         "case_id": case_id,
         "template_version": OPENFOAM_TEMPLATE_VERSION,
+        "mesh_profile": request.mesh_profile,
         "solver": request.solver,
+        "mesh_profile": request.mesh_profile,
         "design": design.model_dump(),
         "boundary_conditions": {
             "heat_load_w": request.heat_load_w,
@@ -75,7 +86,8 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
         "mesh_strategy": {
             "background_cells": cells,
             "surface_refinement_level": 2,
-            "target_cells_through_fin_thickness": 2,
+            "resolution_factor": mesh_factor,
+            "target_cells_through_fin_thickness": 2 * mesh_factor,
             "per_region_quality_required": True,
         },
         "field_contract": {
@@ -316,6 +328,7 @@ def prepare_openfoam_case(
         "heat_load_w": request.heat_load_w,
         "ambient_temperature_c": request.ambient_temperature_c,
         "solver": request.solver,
+        "mesh_profile": request.mesh_profile,
         "template": OPENFOAM_TEMPLATE_VERSION,
     }
     case_id = repository.version(fingerprint, "cae")

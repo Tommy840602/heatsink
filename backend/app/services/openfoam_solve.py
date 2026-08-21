@@ -229,6 +229,7 @@ def run_openfoam_solve(
     case = prepare_openfoam_case(
         OpenFoamCaseRequest(
             design=request.design,
+            mesh_profile=request.mesh_profile,
             heat_load_w=request.heat_load_w,
             ambient_temperature_c=request.ambient_temperature_c,
             run_solver=False,
@@ -496,6 +497,7 @@ def run_openfoam_solve(
     result = {
         "solve_run_id": run_id,
         "case_id": case_id,
+        "mesh_profile": request.mesh_profile,
         "contract_version": SOLVE_CONTRACT_VERSION,
         "status": status,
         "execution_status": execution_status,
@@ -513,6 +515,9 @@ def run_openfoam_solve(
         "response_readiness": readiness,
         "responses": responses,
         "results_available": results_available,
+        "numerically_converged": results_available,
+        "mesh_independence_validated": False,
+        "design_result_available": False,
         "not_cfd_result": not results_available,
         "generated_at": datetime.now(UTC).isoformat(),
         "downloads": {

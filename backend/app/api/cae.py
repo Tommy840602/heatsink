@@ -20,7 +20,7 @@ def runtime_requirements() -> dict[str, Any]:
         "target_distribution": OPENFOAM_TARGET,
         "architecture": "linux/amd64",
         "queue": CAE_QUEUE_NAME,
-        "queue_tasks": ["cae", "cae_mesh", "cae_smoke", "cae_solve", "cae_benchmark"],
+        "queue_tasks": ["cae", "cae_mesh", "cae_smoke", "cae_solve", "cae_campaign", "cae_mesh_study", "cae_benchmark"],
         "tutorial": str(TUTORIAL_RELATIVE_PATH),
         "worker_profile": "cae",
         "package_source": "https://dl.openfoam.com/repos/deb/",
@@ -29,6 +29,8 @@ def runtime_requirements() -> dict[str, Any]:
         "smoke_policy": "A one-step CHT run validates fields, materials, heat source, and solver startup only; it never becomes a design response.",
         "response_policy": "Responses require at least five stable samples, residual convergence, energy balance, and a non-smoke result mode.",
         "solve_policy": "Production CHT runs use immutable checkpoints, may resume only the same case fingerprint, and publish responses only after every numerical gate passes.",
+        "campaign_policy": "Campaigns chain production checkpoints until convergence, cancellation, target time, segment limit, or runtime budget; cancellation is cooperative at checkpoint boundaries.",
+        "mesh_independence_policy": "A publishable design result requires converged coarse, medium, and fine campaigns plus medium-to-fine Tmax and pressure-drop changes within configured limits.",
     }
 
 

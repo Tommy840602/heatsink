@@ -27,3 +27,17 @@ def get_job(job_id: str, queue: JobQueue = Depends(get_job_queue)) -> JobSnapsho
         raise HTTPException(status_code=404, detail="Job not found") from exc
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    response_model=JobSnapshot,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def cancel_job(job_id: str, queue: JobQueue = Depends(get_job_queue)) -> JobSnapshot:
+    try:
+        return JobSnapshot(**queue.cancel(job_id))
+    except NoSuchJobError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc

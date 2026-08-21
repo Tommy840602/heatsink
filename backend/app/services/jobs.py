@@ -16,7 +16,7 @@ CAE_QUEUE_NAME = "thermoform-cae"
 def queue_name_for_task(task: str) -> str:
     return (
         CAE_QUEUE_NAME
-        if task in {"cae", "cae_mesh", "cae_smoke", "cae_solve", "cae_benchmark"}
+        if task in {"cae", "cae_mesh", "cae_smoke", "cae_solve", "cae_campaign", "cae_mesh_study", "cae_benchmark"}
         else DEFAULT_QUEUE_NAME
     )
 
@@ -24,6 +24,7 @@ def queue_name_for_task(task: str) -> str:
 class JobQueue(Protocol):
     def enqueue(self, task: str, payload: dict[str, Any]) -> dict[str, Any]: ...
     def get(self, job_id: str) -> dict[str, Any]: ...
+    def cancel(self, job_id: str) -> dict[str, Any]: ...
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -55,6 +56,16 @@ class RqJobQueue:
         job = Job.fetch(job_id, connection=self.connection)
         return self._snapshot(job, refresh=True)
 
+    def cancel(self, job_id: str) -> dict[str, Any]:
+        job = Job.fetch(job_id, connection=self.connection)
+        current_status = job.get_status(refresh=True)
+        if current_status in {"queued", "deferred", "scheduled"}:
+            job.cancel()
+        elif current_status == "started":
+            job.meta.update({"cancel_requested": True, "stage": "cancel_requested"})
+            job.save_meta()
+        return self._snapshot(job, refresh=True)
+
     @staticmethod
     def _snapshot(job: Job, refresh: bool = False) -> dict[str, Any]:
         status = job.get_status(refresh=refresh)
@@ -70,6 +81,7 @@ class RqJobQueue:
             "progress": job.meta.get("progress", 0),
             "stage": job.meta.get("stage", status),
             "queue": job.meta.get("queue", job.origin),
+            "cancel_requested": bool(job.meta.get("cancel_requested", False)),
         }
 
 
