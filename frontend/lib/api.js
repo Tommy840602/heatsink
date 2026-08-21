@@ -26,6 +26,19 @@ async function cancelJob(jobId) {
   return request(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+function caeCampaignPayload(design, settings) {
+  return {
+    design,
+    heat_load_w: 100,
+    ambient_temperature_c: 25,
+    delta_t_s: 0.00001,
+    write_interval_steps: 10,
+    segment_runtime_seconds: 3600,
+    max_total_runtime_seconds: 18000,
+    ...settings,
+  };
+}
+
 async function runJob(task, payload, onStatus) {
   let job = await submitJob(task, payload);
   onStatus?.(job);
@@ -122,16 +135,14 @@ export const api = {
       onStatus,
     ),
   startCaeCampaign: (design, settings) =>
-    submitJob("cae_campaign", {
-      design,
-      heat_load_w: 100,
-      ambient_temperature_c: 25,
-      delta_t_s: 0.00001,
-      write_interval_steps: 10,
-      segment_runtime_seconds: 3600,
-      max_total_runtime_seconds: 18000,
-      ...settings,
+    submitJob("cae_campaign", caeCampaignPayload(design, settings)),
+  previewCaeResume: (campaignId, design, settings) =>
+    request(`/cae/campaigns/${campaignId}/resume-preview`, {
+      method: "POST",
+      body: JSON.stringify(caeCampaignPayload(design, settings)),
     }),
+  startCaeResume: (validatedPayload) =>
+    submitJob("cae_campaign", validatedPayload),
   runMeshStudy: (campaignIds, onStatus) =>
     runJob(
       "cae_mesh_study",

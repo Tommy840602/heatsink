@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.domain.cae import OpenFoamCaseRequest
+from app.domain.cae import OpenFoamCampaignRequest, OpenFoamCaseRequest
 from app.repositories.artifacts import ArtifactRepository
 from app.services.openfoam import prepare_openfoam_case
 from app.services.jobs import CAE_QUEUE_NAME
@@ -14,6 +14,7 @@ from app.services.cae_history import (
     load_campaign_report,
     load_mesh_study_report,
 )
+from app.services.cae_resume import preview_campaign_resume
 
 
 router = APIRouter(prefix="/api/v1")
@@ -63,6 +64,16 @@ def campaigns(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
 def campaign(campaign_id: str) -> dict[str, Any]:
     try:
         return load_campaign_report(repository, campaign_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
+
+
+@router.post("/cae/campaigns/{campaign_id}/resume-preview")
+def campaign_resume_preview(
+    campaign_id: str, request: OpenFoamCampaignRequest
+) -> dict[str, Any]:
+    try:
+        return preview_campaign_resume(campaign_id, request, repository)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
 

@@ -15,7 +15,7 @@ CancelCheck = Callable[[], bool]
 SolveRunner = Callable[[OpenFoamSolveRequest, ArtifactRepository], dict[str, Any]]
 
 
-def _expected_case_id(
+def expected_campaign_case_id(
     request: OpenFoamCampaignRequest, repository: ArtifactRepository
 ) -> str:
     return repository.version(
@@ -29,6 +29,12 @@ def _expected_case_id(
         },
         "cae",
     )
+
+
+def _expected_case_id(
+    request: OpenFoamCampaignRequest, repository: ArtifactRepository
+) -> str:
+    return expected_campaign_case_id(request, repository)
 
 
 def _load_solve_report(
@@ -66,7 +72,7 @@ def run_openfoam_campaign(
     repository = repository or ArtifactRepository()
     progress_callback = progress_callback or (lambda _current, _total, _stage: None)
     should_cancel = should_cancel or (lambda: False)
-    expected_case_id = _expected_case_id(request, repository)
+    expected_case_id = expected_campaign_case_id(request, repository)
     campaign_id = repository.version(
         {
             "case_id": expected_case_id,

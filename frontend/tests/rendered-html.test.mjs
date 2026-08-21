@@ -68,12 +68,18 @@ test("CAE Operations wires resumable campaigns to the publication gate", async (
   assert.match(page, /localStorage\s*\.\s*setItem\(activeCaeJobStorageKey/);
   assert.match(page, /api\s*\.\s*listCaeCampaigns/);
   assert.match(page, /api\s*\.\s*getCaeCampaign/);
+  assert.match(page, /api\s*\.\s*previewCaeResume/);
+  assert.match(page, /api\s*\.\s*startCaeResume/);
+  assert.match(page, /Checkpoint resume validated/);
+  assert.match(page, /Check & continue/);
+  assert.match(page, /resumePreview\s*&&\s*selectedCampaign\s*&&/);
   assert.match(page, /Recovered campaign history/i);
   assert.match(apiClient, /submitJob\("cae_campaign"/);
   assert.match(apiClient, /runJob\(\s*"cae_mesh_study"/);
   assert.match(apiClient, /`\/jobs\/\$\{jobId\}\/cancel`/);
   assert.match(apiClient, /`\/cae\/campaigns\?limit=\$\{limit\}`/);
   assert.match(apiClient, /`\/cae\/mesh-studies\?limit=\$\{limit\}`/);
+  assert.match(apiClient, /`\/cae\/campaigns\/\$\{campaignId\}\/resume-preview`/);
   assert.match(styles, /\.checkpoint-timeline/);
   assert.match(styles, /\.publication-gate/);
 });

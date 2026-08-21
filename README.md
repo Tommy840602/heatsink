@@ -24,6 +24,8 @@ Phase 3.8 exposes those operations in React. The CAE Operations workspace config
 
 Phase 3.9 makes CAE operations recoverable across browser sessions. FastAPI exposes read-only campaign and mesh-study indexes plus immutable report detail endpoints; React persists the active job ID, reconnects to RQ after a reload, restores the newest report for every mesh profile, and lets engineers inspect older checkpoint timelines without rerunning OpenFOAM.
 
+Phase 3.10 adds guarded continuation from recovered checkpoints. A resume preflight validates the current design and boundary-condition fingerprint, mesh profile, solve report, checkpoint metadata, stored latest time, and a strictly advancing target time before React is allowed to queue a successor `cae_campaign`.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -116,6 +118,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/campaigns` | List newest-first immutable CAE campaign summaries |
 | `GET` | `/api/v1/cae/campaigns/{campaign_id}` | Load one full campaign report and checkpoint timeline |
+| `POST` | `/api/v1/cae/campaigns/{campaign_id}/resume-preview` | Validate checkpoint compatibility and return an exact successor campaign payload |
 | `GET` | `/api/v1/cae/mesh-studies` | List newest-first mesh-independence study summaries |
 | `GET` | `/api/v1/cae/mesh-studies/{mesh_study_id}` | Load one full mesh-independence report |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
@@ -143,6 +146,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - Coarse, medium, and fine campaign cards remain distinct. The React client enables `cae_mesh_study` only when every profile reports numerical convergence, and keeps the publication warning visible until the backend returns `design_result_available=true`.
 - The active CAE job ID is stored locally as a reconnect hint, never as an engineering result. On reload the client polls that RQ job again; if the job record has expired, it removes the stale hint and falls back to immutable campaign reports.
 - Campaign and mesh-study history endpoints skip corrupt/non-report directories, return compact newest-first indexes, validate report IDs before detail reads, and keep full checkpoint segment arrays behind detail requests.
+- **Check & continue** never trusts browser state alone. FastAPI recomputes the expected case fingerprint, validates the selected solve report and checkpoint ZIP metadata, and rejects converged campaigns, missing resume IDs, mismatched cases/profiles/times, and targets that do not advance beyond the checkpoint.
+- A successful preflight returns the exact server-validated `cae_campaign` payload with `resume_from_run_id`; React submits that payload unchanged and then uses the same persisted job reconnect loop as a new campaign.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

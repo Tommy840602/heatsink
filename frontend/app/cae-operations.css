@@ -301,7 +301,7 @@
 
 .campaign-stop-summary {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.4fr auto;
+  grid-template-columns: 1fr 1fr 1.4fr minmax(220px, auto);
   gap: 15px;
   align-items: center;
   border-top: 1px solid var(--line);
@@ -317,6 +317,85 @@
 .campaign-stop-summary strong,
 .campaign-stop-summary code {
   font-size: 8px;
+}
+
+.checkpoint-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 9px;
+}
+
+.checkpoint-actions .text-button:disabled {
+  opacity: 0.4;
+}
+
+.resume-action {
+  min-height: 32px;
+  border: 1px solid var(--orange);
+  border-radius: 3px;
+  padding: 0 12px;
+  background: #fff3ee;
+  color: var(--orange);
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resume-action:disabled {
+  border-color: var(--line);
+  background: #f4f6f4;
+  color: #9aa29f;
+  cursor: not-allowed;
+}
+
+.resume-preflight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #e0aa96;
+  background: #fff6f2;
+}
+
+.resume-preflight > i {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--orange);
+  color: #fff;
+  font-style: normal;
+  font-size: 9px;
+}
+
+.resume-preflight.ready {
+  border-color: #96c9b5;
+  background: #f1faf6;
+}
+
+.resume-preflight.ready > i {
+  background: var(--green);
+}
+
+.resume-preflight strong,
+.resume-preflight p,
+.resume-preflight small {
+  display: block;
+  font-size: 8px;
+}
+
+.resume-preflight p {
+  margin: 4px 0;
+  color: #737d79;
+}
+
+.resume-preflight small {
+  color: #89918e;
+  font-family: monospace;
 }
 
 .history-actions {
@@ -552,8 +631,9 @@
     grid-template-columns: repeat(3, 1fr);
   }
 
-  .campaign-stop-summary button {
+  .campaign-stop-summary > .checkpoint-actions {
     grid-column: 1 / 4;
+    justify-content: flex-start;
   }
 }
 
@@ -571,7 +651,7 @@
     grid-template-columns: 1fr 1fr;
   }
 
-  .campaign-stop-summary button {
+  .campaign-stop-summary > .checkpoint-actions {
     grid-column: 1 / 3;
   }
 

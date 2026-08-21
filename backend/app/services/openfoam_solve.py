@@ -143,13 +143,23 @@ def _safe_extract_checkpoint(
             target = (destination / member.filename).resolve()
             if not target.is_relative_to(destination_root):
                 raise ValueError("OpenFOAM checkpoint contains an unsafe path")
-        try:
-            metadata = json.loads(archive.read(CHECKPOINT_METADATA))
-        except (KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("OpenFOAM checkpoint metadata is missing or invalid") from exc
-        if metadata.get("case_id") != expected_case_id:
-            raise ValueError("OpenFOAM checkpoint belongs to a different case fingerprint")
+        metadata = inspect_checkpoint_metadata(checkpoint, expected_case_id)
         archive.extractall(destination)
+    return metadata
+
+
+def inspect_checkpoint_metadata(
+    checkpoint: Path, expected_case_id: str
+) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(checkpoint) as archive:
+            metadata = json.loads(archive.read(CHECKPOINT_METADATA))
+    except (OSError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+        raise ValueError("OpenFOAM checkpoint metadata is missing or invalid") from exc
+    if not isinstance(metadata, dict):
+        raise ValueError("OpenFOAM checkpoint metadata is missing or invalid")
+    if metadata.get("case_id") != expected_case_id:
+        raise ValueError("OpenFOAM checkpoint belongs to a different case fingerprint")
     return metadata
 
 

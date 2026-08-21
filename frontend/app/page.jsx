@@ -299,6 +299,8 @@ function ModuleView({
   const [campaignHistory, setCampaignHistory] = useState([]);
   const [meshStudyHistory, setMeshStudyHistory] = useState([]);
   const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
+  const [resumeChecking, setResumeChecking] = useState(false);
+  const [resumePreview, setResumePreview] = useState(null);
   const monitoredCaeJobRef = useRef(null);
   const design = useMemo(
     () => ({
@@ -474,6 +476,7 @@ function ModuleView({
   };
   const runCaeCampaign = async () => {
     setMeshStudy(null);
+    setResumePreview(null);
     notify(`${meshProfile} CAE campaign queued · cancellation stops at a safe checkpoint`);
     try {
       const job = await api.startCaeCampaign(cadDesign, {
@@ -488,6 +491,39 @@ function ModuleView({
     } catch {
       setCampaignRunning(false);
       notify("CAE campaign queue unavailable · start Redis and the CAE worker");
+    }
+  };
+  const resumeCaeCampaign = async (campaign) => {
+    if (!campaign?.next_resume_run_id || campaign.results_available) return;
+    setResumeChecking(true);
+    setResumePreview(null);
+    notify(`Checking ${campaign.campaign_id} against the current design and checkpoint`);
+    try {
+      const preview = await api.previewCaeResume(
+        campaign.campaign_id,
+        cadDesign,
+        {
+          mesh_profile: campaign.mesh_profile,
+          target_end_time_s: Number(targetEndTime),
+          segment_duration_s: Number(segmentDuration),
+          parallel_processes: Number(parallelProcesses),
+          max_segments: Number(maxSegments),
+        },
+      );
+      setResumePreview(preview);
+      if (!preview.resume_ready) {
+        notify(`Resume blocked · ${preview.detail}`);
+        return;
+      }
+      const job = await api.startCaeResume(preview.resume_payload);
+      window.localStorage.setItem(activeCaeJobStorageKey, job.job_id);
+      setResumeChecking(false);
+      notify(`Resume validated · continuing from ${preview.resume_from_run_id}`);
+      await monitorCaeJob(job);
+    } catch {
+      notify("Resume preflight or CAE queue is unavailable");
+    } finally {
+      setResumeChecking(false);
     }
   };
   const cancelCaeCampaign = async () => {
@@ -585,6 +621,7 @@ function ModuleView({
         ...current,
         [report.mesh_profile]: report,
       }));
+      setResumePreview(null);
       notify(`${report.campaign_id} loaded from immutable history`);
     } catch {
       notify("Campaign report is no longer available");
@@ -1718,7 +1755,7 @@ function ModuleView({
               </button>
               <span className="tag">
                 {selectedCampaign
-                  ? `${selectedCampaign.segments_completed} SEGMENTS · ${readableState(selectedCampaign.stop_reason)}`
+                  ? `${selectedCampaign.segments_completed ?? 0} SEGMENTS · ${readableState(selectedCampaign.stop_reason)}`
                   : "NO CHECKPOINTS"}
               </span>
             </div>
@@ -1763,16 +1800,47 @@ function ModuleView({
                 <small>NEXT RESUME</small>
                 <code>{selectedCampaign.next_resume_run_id ?? "Not available"}</code>
               </div>
-              {selectedCampaign.downloads?.latest_checkpoint && (
+              <div className="checkpoint-actions">
                 <button
                   className="text-button"
+                  disabled={!selectedCampaign.downloads?.latest_checkpoint}
                   onClick={() => downloadCadArtifact(selectedCampaign.downloads.latest_checkpoint)}
                 >
                   Download checkpoint ↓
                 </button>
-              )}
+                <button
+                  className="resume-action"
+                  disabled={
+                    !selectedCampaign.next_resume_run_id ||
+                    selectedCampaign.results_available ||
+                    campaignRunning ||
+                    resumeChecking
+                  }
+                  onClick={() => resumeCaeCampaign(selectedCampaign)}
+                >
+                  {resumeChecking ? "Checking compatibility…" : "Check & continue →"}
+                </button>
+              </div>
             </div>
           )}
+          {resumePreview &&
+            selectedCampaign &&
+            resumePreview.campaign_id === selectedCampaign.campaign_id && (
+            <div className={`resume-preflight ${resumePreview.resume_ready ? "ready" : "blocked"}`}>
+              <i>{resumePreview.resume_ready ? "✓" : "×"}</i>
+              <div>
+                <strong>
+                  {resumePreview.resume_ready
+                    ? "Checkpoint resume validated"
+                    : `Resume blocked · ${readableState(resumePreview.reason)}`}
+                </strong>
+                <p>{resumePreview.detail}</p>
+                <small>
+                  {Number(resumePreview.current_time_s ?? 0).toExponential(2)} s → {Number(resumePreview.requested_target_end_time_s).toExponential(2)} s · {resumePreview.resume_from_run_id ?? "no checkpoint"}
+                </small>
+              </div>
+            </div>
+            )}
           <div className="cae-history">
             <div>
               <h3>RECOVERED CAMPAIGN HISTORY</h3>
@@ -1798,7 +1866,7 @@ function ModuleView({
                       <small>{summary.campaign_id}</small>
                     </span>
                     <span>
-                      <b>{summary.segments_completed} segments</b>
+                      <b>{summary.segments_completed ?? 0} segments</b>
                       <small>{readableState(summary.stop_reason)}</small>
                     </span>
                     <time dateTime={summary.generated_at}>
