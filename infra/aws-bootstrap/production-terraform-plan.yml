@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Retained Terraform state foundation and GitHub OIDC plan role for the
+  Thermoform production Thanos root. This stack does not deploy Thanos.
+
+Parameters:
+  StateBucketName:
+    Type: String
+    Description: Globally unique bucket used only for production Terraform state.
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    ConstraintDescription: Use a valid, globally unique S3 bucket name.
+
+  StateKey:
+    Type: String
+    Default: thermal-ai/production/thanos.tfstate
+    Description: Exact default-workspace state object key.
+    AllowedPattern: "^(?!.*//)(?!.*\\/\\.\\.?\\/)[A-Za-z0-9][A-Za-z0-9._/-]{1,254}\\.tfstate$"
+    ConstraintDescription: Use a safe relative object key ending in .tfstate.
+
+  ThanosBucketName:
+    Type: String
+    Description: Production Thanos data bucket name planned by Terraform.
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+
+  GitHubOidcSubject:
+    Type: String
+    Description: >-
+      Exact live GitHub OIDC sub claim for the production-plan Environment.
+      Supports legacy and immutable owner/repository ID formats.
+    AllowedPattern: >-
+      ^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?:environment:production-plan$
+    ConstraintDescription: >-
+      Use the exact production-plan Environment subject without wildcards.
+
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Set true only when token.actions.githubusercontent.com is absent from
+      this AWS account. IAM permits only one provider for this URL.
+
+  PlanRoleName:
+    Type: String
+    Default: thermoform-production-plan
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+
+  TerraformNamePrefix:
+    Type: String
+    Default: thermoform-prod
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9+=,.@_-]{1,31}$"
+    Description: Must match the production Terraform name_prefix variable.
+
+Rules:
+  StateAndDataBucketsAreDistinct:
+    Assertions:
+      - Assert:
+          Fn::Not:
+            - Fn::Equals:
+                - Ref: StateBucketName
+                - Ref: ThanosBucketName
+        AssertDescription: StateBucketName and ThanosBucketName must differ.
+
+Conditions:
+  CreateGitHubProvider: !Equals [!Ref CreateGitHubOidcProvider, "true"]
+
+Resources:
+  StateKeyEncryptionKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Encryption key for retained production Terraform state.
+      EnableKeyRotation: true
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DelegateAdministrationToAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+      Tags:
+        - Key: Application
+          Value: thermoform
+        - Key: Environment
+          Value: production
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+  StateKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/thermoform-production-terraform-state
+      TargetKeyId: !Ref StateKeyEncryptionKey
+
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref StateBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: false
+            ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !GetAtt StateKeyEncryptionKey.Arn
+              SSEAlgorithm: aws:kms
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Application
+          Value: thermoform
+        - Key: Environment
+          Value: production
+        - Key: DataClassification
+          Value: terraform-state
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt StateBucket.Arn
+              - !Sub ${StateBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Application
+          Value: thermoform
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+  TerraformPlanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref PlanRoleName
+      Description: Read-only infrastructure plan role with exact state locking access.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ExactGitHubEnvironment
+            Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubProvider
+                - !Ref GitHubOidcProvider
+                - !Sub >-
+                    arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Ref GitHubOidcSubject
+      Policies:
+        - PolicyName: production-terraform-plan
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListExactStateObjects
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+                Condition:
+                  StringEquals:
+                    s3:prefix:
+                      - !Ref StateKey
+                      - !Sub ${StateKey}.tflock
+
+              - Sid: ReadAndWriteStateObject
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub ${StateBucket.Arn}/${StateKey}
+
+              - Sid: OperateExactLockObject
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub ${StateBucket.Arn}/${StateKey}.tflock
+
+              - Sid: UseStateEncryptionKeyThroughS3
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt StateKeyEncryptionKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:CallerAccount: !Ref AWS::AccountId
+                    kms:ViaService: !Sub s3.${AWS::Region}.${AWS::URLSuffix}
+
+              - Sid: ConfirmCallerAccount
+                Effect: Allow
+                Action: sts:GetCallerIdentity
+                Resource: "*"
+
+              - Sid: ReadPlannedThanosBucketConfiguration
+                Effect: Allow
+                Action:
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetBucketAcl
+                  - s3:GetBucketCORS
+                  - s3:GetBucketLocation
+                  - s3:GetBucketLogging
+                  - s3:GetBucketNotification
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:GetBucketOwnershipControls
+                  - s3:GetBucketPolicy
+                  - s3:GetBucketPolicyStatus
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:GetBucketRequestPayment
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketWebsite
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:GetReplicationConfiguration
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ThanosBucketName}
+
+              - Sid: ReadPlannedThanosRoles
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TerraformNamePrefix}-thanos-receive
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TerraformNamePrefix}-thanos-store
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${TerraformNamePrefix}-thanos-compact
+
+              - Sid: ListKmsAliasesForRefresh
+                Effect: Allow
+                Action: kms:ListAliases
+                Resource: "*"
+
+              - Sid: ReadTaggedProductionKmsKeys
+                Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GetKeyPolicy
+                  - kms:GetKeyRotationStatus
+                  - kms:ListResourceTags
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Application: thermoform
+                    aws:ResourceTag/Environment: production
+      Tags:
+        - Key: Application
+          Value: thermoform
+        - Key: Environment
+          Value: production
+        - Key: AccessLevel
+          Value: plan-only
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+Outputs:
+  StateBucketName:
+    Description: Set as the GitHub Environment TF_STATE_BUCKET variable.
+    Value: !Ref StateBucket
+
+  StateKey:
+    Description: Set as the GitHub Environment TF_STATE_KEY variable.
+    Value: !Ref StateKey
+
+  StateKmsKeyArn:
+    Value: !GetAtt StateKeyEncryptionKey.Arn
+
+  TerraformPlanRoleArn:
+    Description: Set as the GitHub Environment TERRAFORM_PLAN_ROLE_ARN variable.
+    Value: !GetAtt TerraformPlanRole.Arn
+
+  GitHubOidcProviderArn:
+    Value: !If
+      - CreateGitHubProvider
+      - !Ref GitHubOidcProvider
+      - !Sub >-
+          arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com

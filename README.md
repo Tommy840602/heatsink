@@ -64,6 +64,8 @@ Phase 3.28 adds the AWS infrastructure contract behind that overlay. A Terraform
 
 Phase 3.29 adds the production Terraform root and a manual, plan-only GitHub Environment gate. Remote state uses a separately bootstrapped encrypted S3 backend with native lockfiles; the committed provider lock and AWS provider account allowlist make dependency or account drift fail closed. GitHub OIDC issues a short-lived session only after `production-plan` approval and exact `main` commit confirmation. The workflow rejects deletes, replacements, plans over 50 changes, and lock-file drift, prints only resource addresses/actions, uploads no plan artifact, and always removes temporary plan files. CI validates this contract without AWS credentials; there is still no production apply path.
 
+Phase 3.30 defines that independent AWS bootstrap as a retained CloudFormation stack, avoiding the circular dependency of Terraform creating its own backend. It provisions a versioned, KMS-encrypted, TLS-only state bucket, optionally creates the account-wide GitHub OIDC provider, and emits a plan role trusted by the exact immutable `production-plan` subject. The role can write one state object and operate only its adjacent lockfile as required by the S3 backend, while managed S3/IAM/KMS access remains read-only. The template defaults OIDC creation off, preserves state security resources on stack deletion, expires no state versions, and is checked by pinned CloudFormation lint plus fail-closed semantic tests. CI still receives no AWS credential and no bootstrap, plan, or apply was executed.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture

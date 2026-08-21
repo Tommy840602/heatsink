@@ -7,11 +7,11 @@ saved plan for review, but it has no apply path and uploads no plan artifact.
 
 ## Bootstrap boundary
 
-Create the remote-state bucket before using this root, through a separately
-reviewed bootstrap process. The state bucket must be distinct from the Thanos
-data bucket and must have public access blocked, versioning enabled, TLS-only
-access, encryption, and recovery monitoring. Do not manage that bucket from the
-state it stores.
+Create the remote-state foundation before using this root through the
+separately reviewed CloudFormation contract in `../../../aws-bootstrap`. The
+state bucket must be distinct from the Thanos data bucket and must have public
+access blocked, versioning enabled, TLS-only access, encryption, and recovery
+monitoring. Do not manage that bucket from the state it stores.
 
 The backend is partially configured in Git. The workflow supplies only the
 reviewed bucket, key, and region at `terraform init`; no backend credentials or
@@ -21,7 +21,8 @@ state key plus `.tflock`; DynamoDB locking is not used.
 The plan role's backend policy should be limited to:
 
 - `s3:ListBucket` for the exact state prefix;
-- `s3:GetObject` and `s3:PutObject` for the exact state object;
+- `s3:GetObject`, `s3:GetObjectVersion`, and `s3:PutObject` for the exact state
+  object;
 - `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` for only its exact
   `.tflock` object.
 
@@ -53,10 +54,12 @@ Create a GitHub Environment named `production-plan` with:
 | `EKS_OIDC_ISSUER_URL` | Exact HTTPS issuer matching that provider ARN |
 
 The AWS plan role must trust GitHub's OIDC provider only for audience
-`sts.amazonaws.com` and exact subject
-`repo:<owner>/<repository>:environment:production-plan`. Confirm the live token
-claims and repository ownership before committing the trust policy; wildcards,
-branch-only subjects, and organization-wide trust are forbidden.
+`sts.amazonaws.com` and the exact live `production-plan` Environment subject.
+For this post-2026-07-15 repository that currently means
+`repo:Tommy840602@84989346/heatsink@1341254721:environment:production-plan`.
+Reconfirm the owner/repository IDs and current GitHub subject format before
+bootstrap; wildcards, branch-only subjects, and organization-wide trust are
+forbidden.
 
 ## Run a plan
 
