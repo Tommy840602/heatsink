@@ -17,7 +17,7 @@ groups:
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
       - alert: ThermoformThanosReceiveDown
-        expr: up{job="thermoform-thanos-receive"} == 0
+        expr: sum(up{job="thermoform-thanos-receive"}) < 2
         for: 1m
         labels:
           severity: critical
@@ -25,9 +25,23 @@ groups:
           component: remote-write
           team: thermal-platform
         annotations:
-          summary: The Thanos remote-write receiver is unreachable
-          description: Both Prometheus replicas retain local data, but new samples cannot enter the shared remote-write store.
+          summary: The Thanos Receive write quorum is unavailable
+          description: Fewer than two of three Receive ingesters are healthy, so RF=3 remote writes cannot reach quorum.
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosreceivedown
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformThanosReceiveReplicaDegraded
+        expr: sum(up{job="thermoform-thanos-receive"}) == 2
+        for: 1m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: remote-write-ha
+          team: thermal-platform
+        annotations:
+          summary: The Thanos Receive replication tier is degraded
+          description: At least one of three Receive replicas is unavailable; RF=3 writes can continue while two replicas remain healthy.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosreceivereplicadegraded
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
       - alert: ThermoformThanosQueryDown
@@ -44,8 +58,36 @@ groups:
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosquerydown
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
+      - alert: ThermoformThanosStoreGatewayDown
+        expr: up{job="thermoform-thanos-store"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: remote-query
+          team: thermal-platform
+        annotations:
+          summary: The Thanos Store Gateway is unreachable
+          description: Real-time Receive queries continue, but historical blocks in the object-store path are unavailable to Query and Grafana.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosstoregatewaydown
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformThanosObjectStoreFailure
+        expr: sum(increase(thanos_objstore_bucket_operation_failures_total{job=~"thermoform-thanos-(receive|store)"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: object-store
+          team: thermal-platform
+        annotations:
+          summary: A Thanos object-store operation failed
+          description: Receive upload or Store Gateway access to the configured long-term block path failed during the last ten minutes.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosobjectstorefailure
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
       - alert: ThermoformRemoteWriteFailure
-        expr: sum(increase(prometheus_remote_storage_samples_failed_total{remote_name="thanos-receive"}[10m])) > 0
+        expr: sum(increase(prometheus_remote_storage_samples_failed_total{remote_name=~"thanos-receive-(a|b)"}[10m])) > 0
         for: 1m
         labels:
           severity: warning
@@ -59,7 +101,7 @@ groups:
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
       - alert: ThermoformRemoteWriteBacklogHigh
-        expr: max(prometheus_remote_storage_samples_pending{remote_name="thanos-receive"}) > 10000
+        expr: max(prometheus_remote_storage_samples_pending{remote_name=~"thanos-receive-(a|b)"}) > 10000
         for: 5m
         labels:
           severity: warning

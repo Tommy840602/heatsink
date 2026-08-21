@@ -15,12 +15,22 @@ import tarfile
 ARCHIVE_IMAGE = "alpine:3.22"
 SCHEMA_1_VOLUME_KEYS = ("prometheus-data", "alertmanager-data")
 SCHEMA_2_VOLUME_KEYS = (*SCHEMA_1_VOLUME_KEYS, "alertmanager-2-data")
+SCHEMA_3_VOLUME_KEYS = (
+    "prometheus-data",
+    "prometheus-2-data",
+    "alertmanager-data",
+    "alertmanager-2-data",
+    "thanos-receive-data",
+)
 VOLUME_KEYS = (
     "prometheus-data",
     "prometheus-2-data",
     "alertmanager-data",
     "alertmanager-2-data",
     "thanos-receive-data",
+    "thanos-receive-2-data",
+    "thanos-receive-3-data",
+    "thanos-object-store-data",
 )
 VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 MANIFEST_NAME = "manifest.json"
@@ -181,7 +191,7 @@ def backup(project_name: str, output_dir: Path):
             "sha256": sha256(archive_path),
         }
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_name": project_name,
         "archive_image": ARCHIVE_IMAGE,
@@ -199,7 +209,7 @@ def restore(project_name: str, input_dir: Path, confirm_empty_volumes: bool):
     manifest_path = input_dir / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     schema_version = manifest.get("schema_version")
-    if schema_version not in {1, 2, 3}:
+    if schema_version not in {1, 2, 3, 4}:
         raise RuntimeError("unsupported backup manifest schema")
     if manifest.get("project_name") != project_name:
         raise RuntimeError("backup project does not match restore project")
@@ -207,7 +217,8 @@ def restore(project_name: str, input_dir: Path, confirm_empty_volumes: bool):
     expected_keys = {
         1: SCHEMA_1_VOLUME_KEYS,
         2: SCHEMA_2_VOLUME_KEYS,
-        3: VOLUME_KEYS,
+        3: SCHEMA_3_VOLUME_KEYS,
+        4: VOLUME_KEYS,
     }[schema_version]
     if not isinstance(entries, dict) or set(entries) != set(expected_keys):
         raise RuntimeError("backup manifest volume set is invalid")

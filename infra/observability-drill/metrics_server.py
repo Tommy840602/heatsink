@@ -42,7 +42,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
         global PHASE
-        if self.path not in {"/phase/1", "/phase/2", "/phase/3"}:
+        if self.path not in {"/phase/1", "/phase/2", "/phase/3", "/phase/4"}:
             self.send_error(404)
             return
         with PHASE_LOCK:

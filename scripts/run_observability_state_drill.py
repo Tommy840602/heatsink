@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -26,6 +27,9 @@ ALERTMANAGER_URL = "http://127.0.0.1:19101"
 ALERTMANAGER_2_URL = "http://127.0.0.1:19102"
 THANOS_QUERY_URL = "http://127.0.0.1:19103"
 THANOS_RECEIVE_URL = "http://127.0.0.1:19105"
+THANOS_RECEIVE_2_URL = "http://127.0.0.1:19113"
+THANOS_RECEIVE_3_URL = "http://127.0.0.1:19114"
+THANOS_STORE_URL = "http://127.0.0.1:19115"
 
 
 def compose(*args, check=True):
@@ -53,6 +57,34 @@ def state_tool(*args, check=True, capture_output=False):
         text=True,
         capture_output=capture_output,
     )
+
+
+def docker(*args, capture_output=False):
+    return subprocess.run(
+        ["docker", *args],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+    )
+
+
+def resolve_volume(volume_key):
+    result = docker(
+        "volume",
+        "ls",
+        "--filter",
+        f"label=com.docker.compose.project={PROJECT_NAME}",
+        "--filter",
+        f"label=com.docker.compose.volume={volume_key}",
+        "--format",
+        "{{.Name}}",
+        capture_output=True,
+    )
+    names = [line for line in result.stdout.splitlines() if line]
+    if len(names) != 1:
+        raise RuntimeError(f"expected one {volume_key} volume, found {len(names)}")
+    return names[0]
 
 
 def get_json(url):
@@ -86,7 +118,13 @@ def ready_probe():
         alertmanager_2_ready = response.status == 200
     thanos_ready = all(
         urlopen(f"{url}/-/ready", timeout=3).status == 200
-        for url in (THANOS_QUERY_URL, THANOS_RECEIVE_URL)
+        for url in (
+            THANOS_QUERY_URL,
+            THANOS_RECEIVE_URL,
+            THANOS_RECEIVE_2_URL,
+            THANOS_RECEIVE_3_URL,
+            THANOS_STORE_URL,
+        )
     )
     return prometheus_ready and alertmanager_ready and alertmanager_2_ready and thanos_ready
 
@@ -103,6 +141,67 @@ def remote_series_probe(query_time=None):
         for item in payload.get("data", {}).get("result", [])
     }
     return sorted(replicas) if replicas == {"prometheus-1", "prometheus-2"} else None
+
+
+def upload_object_store_fixture(fixture_dir):
+    fixture_timestamp = int(time.time()) - 300
+    fixture_dir.chmod(0o777)
+    blocks_dir = fixture_dir / "blocks"
+    blocks_dir.mkdir(mode=0o777)
+    fixture_dir.joinpath("fixture.prom").write_text(
+        "# HELP thermoform_object_store_drill Durable object-store drill sample.\n"
+        "# TYPE thermoform_object_store_drill gauge\n"
+        f"thermoform_object_store_drill{{source=\"fixture\"}} 1 {fixture_timestamp}\n"
+        "# EOF\n",
+        encoding="utf-8",
+    )
+    docker(
+        "run",
+        "--rm",
+        "--entrypoint",
+        "promtool",
+        "--volume",
+        f"{fixture_dir}:/work",
+        "prom/prometheus:v3.5.5",
+        "tsdb",
+        "create-blocks-from",
+        "openmetrics",
+        "/work/fixture.prom",
+        "/work/blocks",
+    )
+    docker(
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--volume",
+        f"{blocks_dir}:/blocks",
+        "--volume",
+        f"{resolve_volume('thanos-object-store-data')}:/thanos/object-store",
+        "--volume",
+        f"{ROOT / 'infra' / 'thanos' / 'object-store.yml'}:/etc/thanos/object-store.yml:ro",
+        "quay.io/thanos/thanos:v0.42.4",
+        "tools",
+        "bucket",
+        "--objstore.config-file=/etc/thanos/object-store.yml",
+        "upload-blocks",
+        "--path=/blocks",
+        '--label=cluster="thermoform-state-drill"',
+        '--label=replica="object-store-fixture"',
+    )
+    return fixture_timestamp
+
+
+def object_store_fixture_probe(query_time):
+    parameters = urlencode(
+        {"query": "thermoform_object_store_drill", "time": query_time}
+    )
+    payload = get_json(f"{THANOS_QUERY_URL}/api/v1/query?{parameters}")
+    results = payload.get("data", {}).get("result", [])
+    for result in results:
+        if result.get("metric", {}).get("source") == "fixture":
+            return result
+    return None
 
 
 def cluster_probe():
@@ -167,11 +266,19 @@ def main():
     comment = f"restore-drill-{PROJECT_NAME}"
     silence_id = None
     remote_query_time = None
+    object_store_query_time = None
+    fixture_dir = Path(tempfile.mkdtemp(prefix="thermoform-object-store-fixture-"))
     try:
         compose("up", "--detach")
         wait_for("Prometheus and Alertmanager readiness", ready_probe, args.timeout)
         wait_for("two-member Alertmanager cluster", cluster_probe, args.timeout)
         wait_for("both remote-write replicas", remote_series_probe, args.timeout)
+        object_store_query_time = upload_object_store_fixture(fixture_dir)
+        wait_for(
+            "Store Gateway to expose the object-store fixture",
+            lambda: object_store_fixture_probe(object_store_query_time),
+            args.timeout,
+        )
         silence_id = create_silence(comment)
         wait_for(
             "silence replication before backup",
@@ -194,11 +301,24 @@ def main():
             "stop",
             "--timeout",
             "20",
+            "thanos-receive",
+            "thanos-receive-2",
+            "thanos-receive-3",
+        )
+        wait_for(
+            "historical object-store query after all Receive ingesters stop",
+            lambda: object_store_fixture_probe(object_store_query_time),
+            args.timeout,
+        )
+        compose(
+            "stop",
+            "--timeout",
+            "20",
             "prometheus",
             "prometheus-2",
             "alertmanager",
             "alertmanager-2",
-            "thanos-receive",
+            "thanos-store",
         )
         remote_query_time = int(time.time()) - 2
         state_tool(
@@ -239,6 +359,11 @@ def main():
             args.timeout,
         )
         wait_for(
+            "restored object-store fixture",
+            lambda: object_store_fixture_probe(object_store_query_time),
+            args.timeout,
+        )
+        wait_for(
             "restored Alertmanager silence",
             lambda: restored_silence_probe(silence_id, comment),
             args.timeout,
@@ -255,7 +380,7 @@ def main():
         print(
             f"PASS: restored silence {silence_id} and verified "
             f"{len(manifest['volumes'])} checksummed volumes, two Prometheus replicas, "
-            "and historical Thanos Receive samples with 7d/64MB retention."
+            "three Receive ingesters, and object-store history with 7d/64MB retention."
         )
         return 0
     except (RuntimeError, subprocess.CalledProcessError, OSError, ValueError) as error:
@@ -269,6 +394,7 @@ def main():
         else:
             compose("down", "--volumes", "--remove-orphans", check=False)
             shutil.rmtree(backup_dir)
+            shutil.rmtree(fixture_dir)
 
 
 if __name__ == "__main__":

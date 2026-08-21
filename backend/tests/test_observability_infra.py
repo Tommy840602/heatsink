@@ -45,7 +45,7 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 17
+    assert len(dashboard["panels"]) == 19
     expressions = {
         target["expr"]
         for panel in dashboard["panels"]
@@ -64,6 +64,9 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     assert 'sum(up{job="thermoform-prometheus"})' in expressions
     assert any("prometheus_remote_storage_samples_pending" in item for item in expressions)
     assert 'up{job=~"thermoform-thanos-(receive|query)"}' in expressions
+    assert 'sum(up{job="thermoform-thanos-receive"})' in expressions
+    assert 'up{job="thermoform-thanos-store"}' in expressions
+    assert any("thanos_objstore_bucket_operation_failures_total" in item for item in expressions)
     assert "prometheus:" in compose
     assert "prometheus-2:" in compose
     assert "alertmanager:" in compose
@@ -112,7 +115,10 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformAlertmanagerPersistenceFailure",
         "ThermoformPrometheusReplicaDegraded",
         "ThermoformThanosReceiveDown",
+        "ThermoformThanosReceiveReplicaDegraded",
         "ThermoformThanosQueryDown",
+        "ThermoformThanosStoreGatewayDown",
+        "ThermoformThanosObjectStoreFailure",
         "ThermoformRemoteWriteFailure",
         "ThermoformRemoteWriteBacklogHigh",
     ):
@@ -198,14 +204,27 @@ def test_prometheus_pair_remote_writes_to_durable_thanos_query_path():
     assert "prometheus-2:" in compose
     assert "prometheus-2-data:/prometheus" in compose
     assert "thanos-receive-data:/thanos/receive" in compose
+    assert "thanos-receive-2-data:/thanos/receive" in compose
+    assert "thanos-receive-3-data:/thanos/receive" in compose
+    assert "thanos-object-store-data:/thanos/object-store" in compose
+    assert "thanos-store:" in compose
     assert "quay.io/thanos/thanos:v0.42.4" in compose
     assert "--query.replica-label=replica" in compose
+    assert "--query.replica-label=receive_replica" in compose
+    assert compose.count("--receive.replication-factor=3") == 3
     assert "url: http://thanos-receive:19291/api/v1/receive" in prometheus
+    assert "url: http://thanos-receive-2:19291/api/v1/receive" in prometheus
+    assert "type: FILESYSTEM" in ROOT.joinpath(
+        "infra/thanos/object-store.yml"
+    ).read_text(encoding="utf-8")
     assert "http://thanos-query:10902" in datasource
     for alert in (
         "ThermoformPrometheusReplicaDegraded",
         "ThermoformThanosReceiveDown",
+        "ThermoformThanosReceiveReplicaDegraded",
         "ThermoformThanosQueryDown",
+        "ThermoformThanosStoreGatewayDown",
+        "ThermoformThanosObjectStoreFailure",
         "ThermoformRemoteWriteFailure",
         "ThermoformRemoteWriteBacklogHigh",
     ):
@@ -226,7 +245,8 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
 
     assert 'SCHEMA_1_VOLUME_KEYS = ("prometheus-data", "alertmanager-data")' in tool
     assert 'SCHEMA_2_VOLUME_KEYS = (*SCHEMA_1_VOLUME_KEYS, "alertmanager-2-data")' in tool
-    assert '"schema_version": 3' in tool
+    assert "SCHEMA_3_VOLUME_KEYS" in tool
+    assert '"schema_version": 4' in tool
     assert "com.docker.compose.project" in tool
     assert "com.docker.compose.volume" in tool
     assert "--confirm-empty-volumes" in tool
@@ -238,12 +258,17 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
     assert "PROMETHEUS_2_URL" in drill
     assert "THANOS_QUERY_URL" in drill
     assert "restored historical remote-write samples" in drill
+    assert "restored object-store fixture" in drill
+    assert "upload_object_store_fixture" in drill
     assert '"down", "--volumes", "--remove-orphans"' in drill
     assert "prometheus-data:" in compose
     assert "prometheus-2-data:" in compose
     assert "alertmanager-data:" in compose
     assert "alertmanager-2-data:" in compose
     assert "thanos-receive-data:" in compose
+    assert "thanos-receive-2-data:" in compose
+    assert "thanos-receive-3-data:" in compose
+    assert "thanos-object-store-data:" in compose
 
 
 def test_observability_drill_is_isolated_and_checks_the_warning_route():
@@ -264,9 +289,11 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert "127.0.0.1:19091:9090" in compose
     assert "thanos-receive:" in compose
     assert "thanos-query:" in compose
+    assert "thanos-store:" in compose
     assert "ThermoformCaeWatchdogMissingDrill" in rule
     assert "ThermoformAlertmanagerFailoverDrill" in rule
     assert "ThermoformPrometheusFailoverDrill" in rule
+    assert "ThermoformReceiveFailoverDrill" in rule
     assert 'drill: "true"' in rule
     assert 'PROJECT_NAME = "thermoform-observability-drill"' in script
     assert "receiver-fixture:" in compose
@@ -274,7 +301,7 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert 'receiver != "warning-operations-webhook"' in script
     assert "render_alertmanager_runtime.py" in script
     assert "replicated_silence_probe" in script
-    assert "remote_replica_probe" in script
+    assert "remote_copy_probe" in script
     assert "deduplicated_remote_probe" in script
     assert "PROMETHEUS_2_URL" in script
     assert '"alertmanager", environment=environment' in script

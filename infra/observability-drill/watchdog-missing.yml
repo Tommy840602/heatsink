@@ -16,8 +16,22 @@ groups:
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaewatchdogmissing
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
-      - alert: ThermoformPrometheusFailoverDrill
+      - alert: ThermoformReceiveFailoverDrill
         expr: thermoform_observability_drill_phase == 2
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: remote-write-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Receive quorum drill entered the ingester-failover phase
+          description: A new series is emitted only after the first Receive stops, proving RF=3 reaches quorum through the remaining two ingesters.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thanos-receive-quorum-failover
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformPrometheusFailoverDrill
+        expr: thermoform_observability_drill_phase == 3
         labels:
           severity: warning
           service: thermoform-cae
@@ -31,7 +45,7 @@ groups:
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
       - alert: ThermoformAlertmanagerFailoverDrill
-        expr: thermoform_observability_drill_phase == 3
+        expr: thermoform_observability_drill_phase == 4
         labels:
           severity: warning
           service: thermoform-cae

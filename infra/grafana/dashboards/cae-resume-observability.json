@@ -225,8 +225,8 @@
       "id": 16,
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
-        { "expr": "max(prometheus_remote_storage_samples_pending{remote_name=\"thanos-receive\"})", "legendFormat": "pending", "refId": "A" },
-        { "expr": "sum(increase(prometheus_remote_storage_samples_failed_total{remote_name=\"thanos-receive\"}[1h]))", "legendFormat": "failed / 1h", "refId": "B" }
+        { "expr": "max(prometheus_remote_storage_samples_pending{remote_name=~\"thanos-receive-(a|b)\"})", "legendFormat": "pending", "refId": "A" },
+        { "expr": "sum(increase(prometheus_remote_storage_samples_failed_total{remote_name=~\"thanos-receive-(a|b)\"}[1h]))", "legendFormat": "failed / 1h", "refId": "B" }
       ],
       "title": "Remote-write queue health",
       "type": "timeseries"
@@ -242,6 +242,29 @@
       ],
       "title": "Thanos service availability",
       "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "max": 3, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 2 }, { "color": "green", "value": 3 }] } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 47 },
+      "id": 18,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum(up{job=\"thermoform-thanos-receive\"})", "refId": "A" }],
+      "title": "Receive quorum replicas available",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 47 },
+      "id": 19,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "up{job=\"thermoform-thanos-store\"}", "legendFormat": "Store Gateway", "refId": "A" },
+        { "expr": "sum(increase(thanos_objstore_bucket_operation_failures_total{job=~\"thermoform-thanos-(receive|store)\"}[1h]))", "legendFormat": "object-store failures / 1h", "refId": "B" }
+      ],
+      "title": "Object-store query path",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",
@@ -263,5 +286,5 @@
   "timezone": "browser",
   "title": "CAE Resume Observability",
   "uid": "thermoform-cae-resume",
-  "version": 6
+  "version": 7
 }

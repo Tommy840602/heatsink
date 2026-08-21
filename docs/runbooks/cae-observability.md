@@ -172,18 +172,42 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## ThermoformThanosReceiveDown
 
-**Impact:** both Prometheus replicas retain local samples, but the shared durable query path is no longer receiving new data.
+**Impact:** fewer than two of the three Receive ingesters are healthy, so RF=3 writes cannot reach quorum. Both Prometheus replicas retain local samples while their remote-write queues retry.
 
-1. Check Receive readiness, disk capacity, ownership of `/thanos/receive`, WAL errors, and remote-write failures on both Prometheus replicas.
-2. Preserve the Receive volume; do not delete the WAL to recover availability.
-3. Restore Receive and verify pending queues drain without failed-sample growth.
+1. Check all three readiness endpoints, ring membership, disk capacity, `/thanos/receive` ownership, and WAL errors.
+2. Preserve every Receive volume; do not delete a WAL to recover availability.
+3. Restore at least two ingesters, then verify both remote-write queues drain without failed-sample growth.
+
+## ThermoformThanosReceiveReplicaDegraded
+
+**Impact:** one of the three RF=3 ingesters is unavailable. Writes remain acknowledged by the two healthy replicas, but another loss removes quorum.
+
+1. Identify missing `instance` labels and distinguish process loss from a scrape-only failure.
+2. Confirm both `thanos-receive-a` and `thanos-receive-b` queues; one failed ingress must not stop the other.
+3. Query with `dedup=false` and confirm current samples remain on the surviving `receive_replica` values before repairing the failed node.
 
 ## ThermoformThanosQueryDown
 
 **Impact:** Grafana and shared historical queries are unavailable even though local collection and remote write may continue.
 
-1. Check Query readiness and its StoreAPI connection to `thanos-receive:10901`.
+1. Check Query readiness and its StoreAPI connections to all three Receive ingesters plus `thanos-store:10901`.
 2. Query each Prometheus locally while repairing Query, then verify the Grafana datasource returns deduplicated data.
+
+## ThermoformThanosStoreGatewayDown
+
+**Impact:** real-time Receive queries remain available, but historical blocks in the object-store path are absent from Query and Grafana.
+
+1. Inspect Store Gateway readiness, block synchronization, local cache permissions, and object-store mount availability.
+2. Do not treat successful current queries as historical recovery; query a known timestamp that exists only in a shipped block.
+3. Restart Store Gateway and verify it discovers the expected block count before resolving.
+
+## ThermoformThanosObjectStoreFailure
+
+**Impact:** a Receive upload or Store Gateway read/list operation failed. Local receiver TSDBs may mask the problem until retention removes those blocks.
+
+1. Break down `thanos_objstore_bucket_operation_failures_total` by job, instance, and operation.
+2. Check the configured bucket path, ownership, capacity, consistency, and Store Gateway synchronization logs.
+3. Preserve the bucket and verify a known historical-only series before closing the incident.
 
 ## ThermoformRemoteWriteFailure
 
@@ -202,23 +226,32 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## Offline backup and restore
 
-The backup tool covers both Prometheus volumes, both Alertmanager volumes, and `thanos-receive-data`. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema-1 and schema-2 backups remain restorable; newly introduced volumes start empty and converge or rebuild after startup.
+The backup tool covers both Prometheus volumes, both Alertmanager volumes, all three Receive TSDB volumes, and `thanos-object-store-data`. Store Gateway cache is excluded because it is rebuilt from the bucket. The tool refuses any covered volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema 1–3 backups remain restorable; newly introduced volumes start empty and converge or rebuild after startup.
 
-1. Identify the exact Compose project with `docker compose ls` and stop `prometheus`, `prometheus-2`, `alertmanager`, `alertmanager-2`, and `thanos-receive` gracefully.
+1. Identify the exact Compose project with `docker compose ls` and stop both Prometheus replicas, both Alertmanagers, all three Receive ingesters, and `thanos-store` gracefully.
 2. Run `python scripts/observability_state.py backup --project-name <project> --output-dir <new-backup-directory>`.
 3. Start the services again immediately after backup and copy the backup directory to durable storage.
 4. For recovery, preserve or quarantine damaged volumes and let Compose create empty replacements with the same project labels. The tool never deletes or overwrites existing state.
 5. With the target services stopped, run `python scripts/observability_state.py restore --project-name <project> --input-dir <backup-directory> --confirm-empty-volumes`, then start the services.
-6. Verify both Prometheus replicas and retention, historical data through Thanos Query, Alertmanager silences, notification deduplication state, dashboards, and both Alertmanager scrape targets.
+6. Verify both Prometheus replicas and retention, all three Receive replicas, a historical-only Store Gateway query, Alertmanager state, dashboards, and all scrape targets.
 
 ## Prometheus HA and remote-write failover
 
-1. Confirm both Prometheus readiness endpoints are healthy and Thanos Query returns two series with `dedup=false`, distinguished by `replica`.
+1. Confirm both Prometheus readiness endpoints are healthy and both remote-write queues are moving.
 2. Stop the first Prometheus, then emit a new drill phase and prove the second replica evaluates and delivers the new alert.
 3. Query the new phase through Thanos and confirm samples continue from `prometheus-2`; old notifications or old samples do not prove continuity.
-4. Restart the first replica and confirm the remote-write backlog drains and Thanos Query's normal deduplicated view contains one logical series.
+4. Restart the first replica and confirm both queues drain and Thanos Query's normal deduplicated view contains one logical series.
 
-Both Prometheus replicas and the single Receive process share one Docker host, so this topology does not survive host loss. The Receive volume is durable local remote-write storage, not object storage and not a highly available remote-store cluster.
+Normal operation intentionally sends each sample to two Receive ingress URLs; this doubles remote-write traffic but prevents one ingress process from blocking both Prometheus streams.
+
+## Thanos Receive quorum failover
+
+1. Confirm three Receive readiness endpoints and six `dedup=false` copies for a two-Prometheus drill series: every `replica` × `receive_replica` pair.
+2. Stop Receive-1, emit a new phase, and verify both Prometheus streams reach Receive-2 and Receive-3 while the RF=3 write quorum remains satisfied.
+3. Confirm `ThermoformThanosReceiveReplicaDegraded` fires, `ThermoformThanosReceiveDown` does not, and the normal query still returns one logical series.
+4. Restart Receive-1, verify ring readiness and backlog drainage, then confirm three current `receive_replica` values again.
+
+All Prometheus, Receive, Store Gateway, and filesystem bucket volumes still share one Docker host. The filesystem object-store adapter is deterministic for this local reference and CI, but Thanos documents it as a test/demo option; production must use strongly consistent managed object storage and separate failure domains.
 
 ## Alertmanager HA failover
 
@@ -241,7 +274,7 @@ The Compose peers share one host and an unencrypted private Docker network. A cr
 
 ## Recovery verification
 
-- Both Prometheus replicas target the API, both Alertmanagers, Receive, and Query; all twenty-one alert rules are loaded.
+- Both Prometheus replicas target the API, both Alertmanagers, three Receive ingesters, Query, and Store Gateway; all twenty-four alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.

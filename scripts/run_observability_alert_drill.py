@@ -27,7 +27,11 @@ RECEIVER_URL = "http://127.0.0.1:19094"
 METRICS_FIXTURE_URL = "http://127.0.0.1:19096"
 THANOS_QUERY_URL = "http://127.0.0.1:19097"
 THANOS_RECEIVE_URL = "http://127.0.0.1:19098"
+THANOS_RECEIVE_2_URL = "http://127.0.0.1:19110"
+THANOS_RECEIVE_3_URL = "http://127.0.0.1:19111"
+THANOS_STORE_URL = "http://127.0.0.1:19112"
 ALERT_NAME = "ThermoformCaeWatchdogMissingDrill"
+RECEIVE_FAILOVER_ALERT_NAME = "ThermoformReceiveFailoverDrill"
 PROMETHEUS_FAILOVER_ALERT_NAME = "ThermoformPrometheusFailoverDrill"
 FAILOVER_ALERT_NAME = "ThermoformAlertmanagerFailoverDrill"
 EXPECTED_GROUPS = {
@@ -98,6 +102,9 @@ def metrics_tier_probe():
         f"{PROMETHEUS_URL}/-/ready",
         f"{PROMETHEUS_2_URL}/-/ready",
         f"{THANOS_RECEIVE_URL}/-/ready",
+        f"{THANOS_RECEIVE_2_URL}/-/ready",
+        f"{THANOS_RECEIVE_3_URL}/-/ready",
+        f"{THANOS_STORE_URL}/-/ready",
         f"{THANOS_QUERY_URL}/-/ready",
     )
     for url in urls:
@@ -107,7 +114,7 @@ def metrics_tier_probe():
     return urls
 
 
-def remote_replica_probe(phase, expected_replicas):
+def remote_copy_probe(phase, expected_prometheus_replicas, expected_receive_replicas):
     parameters = urlencode(
         {
             "query": f"thermoform_observability_drill_phase == {phase}",
@@ -117,12 +124,19 @@ def remote_replica_probe(phase, expected_replicas):
     payload = get_json(f"{THANOS_QUERY_URL}/api/v1/query?{parameters}")
     if payload.get("status") != "success":
         return None
-    replicas = {
-        result.get("metric", {}).get("replica")
+    copies = {
+        (
+            result.get("metric", {}).get("replica"),
+            result.get("metric", {}).get("receive_replica"),
+        )
         for result in payload.get("data", {}).get("result", [])
     }
-    replicas.discard(None)
-    return replicas if replicas == set(expected_replicas) else None
+    expected = {
+        (prometheus_replica, receive_replica)
+        for prometheus_replica in expected_prometheus_replicas
+        for receive_replica in expected_receive_replicas
+    }
+    return copies if copies == expected else None
 
 
 def deduplicated_remote_probe(phase):
@@ -296,9 +310,13 @@ def main():
             lambda: receiver_probe(ALERT_NAME),
             args.timeout,
         )
-        initial_remote_replicas = wait_for(
-            "both Prometheus replicas to remote-write the drill series",
-            lambda: remote_replica_probe(1, {"prometheus-1", "prometheus-2"}),
+        initial_remote_copies = wait_for(
+            "both Prometheus streams to replicate across all Receive ingesters",
+            lambda: remote_copy_probe(
+                1,
+                {"prometheus-1", "prometheus-2"},
+                {"receive-1", "receive-2", "receive-3"},
+            ),
             args.timeout,
         )
         wait_for(
@@ -306,8 +324,34 @@ def main():
             lambda: deduplicated_remote_probe(1),
             args.timeout,
         )
-        compose("stop", "--timeout", "20", "prometheus", environment=environment)
+        compose("stop", "--timeout", "20", "thanos-receive", environment=environment)
         set_phase(2)
+        wait_for(
+            "the Receive failover drill alert to fire",
+            lambda: prometheus_alert_probe(RECEIVE_FAILOVER_ALERT_NAME),
+            args.timeout,
+        )
+        receive_failover_delivery = wait_for(
+            "the Receive failover alert to reach the authenticated receiver",
+            lambda: receiver_probe(RECEIVE_FAILOVER_ALERT_NAME),
+            args.timeout,
+        )
+        surviving_receive_copies = wait_for(
+            "RF=3 writes to reach quorum through two surviving ingesters",
+            lambda: remote_copy_probe(
+                2,
+                {"prometheus-1", "prometheus-2"},
+                {"receive-2", "receive-3"},
+            ),
+            args.timeout,
+        )
+        wait_for(
+            "Thanos Query to deduplicate the receiver-failover series",
+            lambda: deduplicated_remote_probe(2),
+            args.timeout,
+        )
+        compose("stop", "--timeout", "20", "prometheus", environment=environment)
+        set_phase(3)
         wait_for(
             "the surviving Prometheus replica to fire a new alert",
             lambda: prometheus_alert_probe(
@@ -322,11 +366,15 @@ def main():
         )
         surviving_remote_replicas = wait_for(
             "the surviving Prometheus replica to continue remote write",
-            lambda: remote_replica_probe(2, {"prometheus-2"}),
+            lambda: remote_copy_probe(
+                3,
+                {"prometheus-2"},
+                {"receive-2", "receive-3"},
+            ),
             args.timeout,
         )
         compose("stop", "--timeout", "20", "alertmanager", environment=environment)
-        set_phase(3)
+        set_phase(4)
         wait_for(
             "Prometheus to fire a new alert after primary failure",
             lambda: prometheus_alert_probe(FAILOVER_ALERT_NAME, PROMETHEUS_2_URL),
@@ -346,7 +394,9 @@ def main():
             f"PASS: {ALERT_NAME} traversed metrics fixture -> Prometheus -> "
             f"Alertmanager receiver {receiver} -> authenticated webhook fixture; "
             f"initial group {delivery['groupKey']}; "
-            f"remote replicas {sorted(initial_remote_replicas)}; primary Prometheus "
+            f"{len(initial_remote_copies)} initial replicated copies; first Receive "
+            f"stop retained {sorted(surviving_receive_copies)} via group "
+            f"{receive_failover_delivery['groupKey']}; primary Prometheus "
             f"stop retained {sorted(surviving_remote_replicas)} via group "
             f"{prometheus_failover_delivery['groupKey']}; "
             f"{len(cluster)} peers replicated silence {silence_id}; primary stop "

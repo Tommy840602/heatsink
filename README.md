@@ -50,6 +50,8 @@ Phase 3.21 removes the single Alertmanager process from the notification path. P
 
 Phase 3.22 adds a second Prometheus rule evaluator and a durable shared remote-write path. Both replicas write uniquely labeled samples to Thanos Receive; Thanos Query deduplicates on `replica` and is Grafana's datasource. New alerts and dashboard panels cover replica loss, Receive/Query availability, failed samples, and queue backlog. The drill stops the primary Prometheus, proves the secondary evaluates and delivers a newly created alert, and verifies new remote samples continue from only that replica. Offline backup schema 3 now protects both Prometheus volumes, both Alertmanager volumes, and Receive state. Receive is a single local persistent service without object storage, and every component shares one Docker host, so remote-store or host-level HA is not claimed.
 
+Phase 3.23 replaces the single Receive process with a three-ingester Ketama ring and RF=3 quorum writes. Each Prometheus fans out to two ingress URLs, Thanos Query deduplicates both Prometheus and Receive replica labels, and Store Gateway reads long-term blocks from a shared object-store interface. New alerts distinguish degraded replication from lost write quorum, Store Gateway loss, and bucket-operation failure. The HA drill proves new samples and alerts survive one ingester, one Prometheus, and one Alertmanager failure in sequence; backup schema 4 protects eight source-of-truth volumes and verifies an object-store-only historical series after all ingesters stop. The local stack uses Thanos's filesystem bucket adapter for deterministic CI, so it remains a same-host reference rather than production S3 or cross-failure-domain HA.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -62,7 +64,7 @@ Browser
                  ├─ Redis job queue → isolated RQ worker
                  ├─ RQ Cron watchdog → durable resume heartbeat audit
                  ├─ Prometheus HA pair + bounded local TSDB (:9090/:9091)
-                 ├─ Thanos Receive remote write + deduplicated Query (:10909/:10902)
+                 ├─ Thanos Receive RF=3 ring + Store Gateway + Query (:10909–:10912/:10902)
                  ├─ Alertmanager HA pair + authenticated delivery (:9093/:9095)
                  ├─ provisioned Grafana recovery dashboard (:3001)
                  ├─ design validation + standard CCD / BBD / LHS
@@ -101,13 +103,15 @@ docker compose --profile cae up --build
 - Prometheus replica 2: http://localhost:9091
 - Thanos Query: http://localhost:10902
 - Thanos Receive health/API: http://localhost:10909
+- Thanos Receive replicas 2/3: http://localhost:10910 and http://localhost:10911
+- Thanos Store Gateway: http://localhost:10912
 - Alertmanager replica 1: http://localhost:9093
 - Alertmanager replica 2: http://localhost:9095
 - Grafana: http://localhost:3001 (`admin` / `thermoform` for local development)
 - Redis and the RQ worker run as internal Compose services.
 - The watchdog service schedules server-side resume reconciliation every 60 seconds; it does not wait for a browser session.
-- Both Prometheus replicas scrape durable CAE recovery metrics, each other, Thanos, and both Alertmanager replicas every 15 seconds, send alerts directly to both peers, and remote-write to Receive. They evaluate the 99.5% recovery SLO, burn rates, notification and HA failures, TSDB consumption, retention drift, and state-maintenance failures. The default receivers keep active grouped alerts in the local Alertmanager UI without contacting an external system.
-- Each Prometheus retains at most 30 days and 8 GB of local TSDB blocks; Receive retains its local TSDB for 30 days; Alertmanager retains silence and notification-log state for 120 hours. Grafana queries Thanos Query and includes recovery SLO, delivery, retention, state, replica, and remote-write panels. Every alert links to `docs/runbooks/cae-observability.md`.
+- Both Prometheus replicas scrape durable CAE recovery metrics, each other, the three-ingester Thanos tier, and both Alertmanagers every 15 seconds. Each sends alerts to both peers and remote-writes to two Receive ingress URLs; RF=3 requires two ingesters to acknowledge a write. They evaluate the 99.5% recovery SLO, notification, storage, quorum, object-store, and process HA failures.
+- Each Prometheus retains at most 30 days and 8 GB locally; each Receive retains 30 days locally and ships blocks through the configured object-store interface; Alertmanager retains state for 120 hours. Grafana queries Thanos Query across real-time Receive APIs and Store Gateway. Every alert links to `docs/runbooks/cae-observability.md`.
 - The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
 ## Local development
@@ -162,11 +166,11 @@ python scripts/run_observability_state_drill.py
 For an operational backup, first obtain the exact project name from `docker compose ls`, then stop only the state owners and archive them:
 
 ```bash
-docker compose stop prometheus prometheus-2 alertmanager alertmanager-2 thanos-receive
+docker compose stop prometheus prometheus-2 alertmanager alertmanager-2 thanos-receive thanos-receive-2 thanos-receive-3 thanos-store
 python scripts/observability_state.py backup \
   --project-name heat-sink \
   --output-dir /secure/backups/thermoform-observability-YYYYMMDD
-docker compose start prometheus prometheus-2 alertmanager alertmanager-2 thanos-receive
+docker compose start prometheus prometheus-2 alertmanager alertmanager-2 thanos-receive thanos-receive-2 thanos-receive-3 thanos-store
 ```
 
 Restore requires stopped services, an intact checksum manifest, the explicit `--confirm-empty-volumes` flag, and empty replacement volumes. It never deletes or overwrites an existing volume.
@@ -247,14 +251,14 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - FastAPI derives `/metrics` and `/api/v1/cae/observability` from the shared artifact volume rather than process-local counters. Prometheus alert rules cover API availability, watchdog presence/age, heartbeat leases, orphan repair increments, and failed retries; React shows the same snapshot without parsing Prometheus text.
 - Alertmanager groups by service, component, and severity; critical alerts repeat hourly, warnings repeat every four hours, API loss inhibits dependent recovery symptoms, and a missing watchdog inhibits its stale-age symptom. External delivery credentials belong only in runtime secret files.
 - The recovery SLI is one only when FastAPI is scrapeable and its durable recovery-health contract is healthy. Recording rules expose thirty-day availability and remaining budget for the 99.5% objective; paired 5m/1h and 30m/6h windows alert on fast and persistent budget burn without relying on training or process-local data.
-- `scripts/run_observability_alert_drill.py` starts a project-scoped fixture, two Prometheus replicas, Thanos Receive/Query, two clustered Alertmanagers, and an authenticated receiver. It verifies remote replica identity, production routing, silence replication, and delivery plus remote-write continuity after each primary stops, then removes only that isolated stack.
+- `scripts/run_observability_alert_drill.py` starts two Prometheus replicas, a three-ingester Receive ring, Store Gateway/Query, two Alertmanagers, and an authenticated receiver. It verifies six replicated copies collapse to one logical series, then proves continuity after Receive-1, Prometheus-1, and Alertmanager-1 stop in sequence.
 - The runtime Alertmanager renderer replaces all default, critical, and warning webhook endpoints only after validating HTTPS and the external token file. Alertmanager reads the token directly from `/run/secrets`; the generated YAML never contains its value.
 - Prometheus scrapes both Alertmanager replicas. One reachable replica triggers a degraded warning, zero triggers the critical outage, incomplete gossip membership is detected independently, and webhook failures use a local fallback receiver.
 - The isolated drill now continues through an authenticated receiver fixture, verifies the standard Alertmanager v4 payload, production severity route, bearer header, group key, and runbook annotation, and exposes no received credential in its verification API.
 - Prometheus self-scraping exposes the configured retention limit and total blocks/WAL/head usage. A recording rule alerts at 80% so operators can preserve the recommended host-disk compaction buffer instead of treating the retention limit as usable disk capacity.
-- `observability_state.py` resolves all five observability volumes only through exact Compose project/volume labels, refuses active or nonempty volumes, produces checksummed archives without shell-expanded volume names, rejects traversal, links, and device members, and retains schema-1/schema-2 restore compatibility.
-- `run_observability_state_drill.py` creates unique project-scoped volumes, replicates a real Alertmanager silence, waits for both remote-write replicas, performs a graceful offline backup, destroys and recreates only the drill volumes, restores all five archives, and verifies the same silence plus historical Receive samples before cleanup.
-- Prometheus replicas use stable `cluster=thermoform` and unique `replica` labels; alert-side replica removal gives Alertmanager identical alert identity while Thanos Query uses the label for sample deduplication. The single local Receive volume is durable but is not object storage or a remote-store HA deployment.
+- `observability_state.py` resolves eight source-of-truth observability volumes through exact Compose labels, refuses active or nonempty volumes, produces checksummed archives, rejects hostile tar members, and retains schema 1–3 restore compatibility. Store Gateway cache is deliberately rebuildable and excluded.
+- `run_observability_state_drill.py` uploads a deterministic historical block, proves Store Gateway still serves it after all Receive ingesters stop, restores eight archives after volume reconstruction, and verifies the block plus replicated Alertmanager silence and real-time data.
+- Prometheus replicas use stable `cluster`/`replica` labels; Receive ingesters add `receive_replica`. Query removes both dimensions for normal views. The filesystem bucket and all processes share one host, so production object-store and host-level HA are not claimed.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

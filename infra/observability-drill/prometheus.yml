@@ -14,8 +14,16 @@ rule_files:
   - /etc/prometheus/watchdog-missing.yml
 
 remote_write:
-  - name: thanos-receive
+  - name: thanos-receive-a
     url: http://thanos-receive:19291/api/v1/receive
+    queue_config:
+      capacity: 2000
+      min_shards: 1
+      max_shards: 2
+      max_samples_per_send: 500
+      batch_send_deadline: 1s
+  - name: thanos-receive-b
+    url: http://thanos-receive-2:19291/api/v1/receive
     queue_config:
       capacity: 2000
       min_shards: 1
@@ -56,8 +64,15 @@ scrape_configs:
     static_configs:
       - targets:
           - thanos-receive:10902
+          - thanos-receive-2:10902
+          - thanos-receive-3:10902
 
   - job_name: thermoform-thanos-query
     static_configs:
       - targets:
           - thanos-query:10902
+
+  - job_name: thermoform-thanos-store
+    static_configs:
+      - targets:
+          - thanos-store:10902
