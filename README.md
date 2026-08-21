@@ -58,6 +58,8 @@ Phase 3.25 adds the singleton Thanos Compactor that owns block compaction, downs
 
 Phase 3.26 adds a production Kubernetes topology for that Thanos data path. Receive runs as a fixed three-member RF=3 StatefulSet with strict node and three-zone spreading; Store Gateway and Query each have two replicas, and Compactor remains a singleton. Separate ServiceAccounts preserve least privilege, retained PVCs protect local state, PodDisruptionBudgets cover voluntary maintenance, and default-deny ingress exposes only labelled metrics writers/readers. The base contains no cloud credential or public Service and requires an environment overlay for workload identity, StorageClass, capacity, and provider integration. CI renders all 24 resources, validates the Kubernetes 1.34 schema, and enforces the HA/security contract.
 
+Phase 3.27 makes that production contract deployable on standard Amazon EKS managed nodes. A fail-closed overlay adds three distinct IRSA bindings and an encrypted gp3 EBS CSI StorageClass with retained, zone-aware volume binding; a renderer refuses placeholder, wildcard, shared, or malformed role ARNs and emits no AWS credential. A read-only cluster preflight verifies Kubernetes 1.34, three schedulable zones, safe storage semantics, and EBS CSI registration on every eligible node. CI now validates both the provider-neutral 24-resource base and the fully bound 25-resource EKS manifest; real AWS resources and cluster rollout remain explicit operator actions.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture

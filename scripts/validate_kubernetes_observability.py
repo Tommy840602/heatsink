@@ -42,7 +42,12 @@ def _resource(documents: dict[tuple[str, str], str], kind: str, name: str) -> st
 
 def validate(manifest: str) -> None:
     documents = _documents(manifest)
-    _require(len(documents) == 24, f"expected 24 resources, found {len(documents)}")
+    eks_storage_key = ("StorageClass", "thermoform-ebs-gp3")
+    expected_resources = 25 if eks_storage_key in documents else 24
+    _require(
+        len(documents) == expected_resources,
+        f"expected {expected_resources} resources, found {len(documents)}",
+    )
 
     namespace = _resource(documents, "Namespace", "thermoform-observability")
     for mode in ("enforce", "audit", "warn"):
@@ -59,6 +64,32 @@ def validate(manifest: str) -> None:
         "automountServiceAccountToken: false" in service_accounts["thanos-query"],
         "Query must not receive an API token",
     )
+
+    if eks_storage_key in documents:
+        role_arns: list[str] = []
+        for name in ("thanos-receive", "thanos-store", "thanos-compact"):
+            account = service_accounts[name]
+            role_match = re.search(
+                r"eks\.amazonaws\.com/role-arn:\s*"
+                r"(arn:(?:aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/"
+                r"[A-Za-z0-9+=,.@_/-]+)",
+                account,
+            )
+            _require(role_match is not None, f"{name} must have a complete IRSA role ARN")
+            role_arns.append(role_match.group(1))
+            _require(
+                'eks.amazonaws.com/sts-regional-endpoints: "true"' in account,
+                f"{name} must use regional STS",
+            )
+        _require(len(set(role_arns)) == 3, "EKS bucket clients must use distinct IAM roles")
+        _require(
+            len({role.split(":", 2)[1] for role in role_arns}) == 1,
+            "EKS bucket clients must use one AWS partition",
+        )
+        _require(
+            "eks.amazonaws.com/role-arn:" not in service_accounts["thanos-query"],
+            "Query must not have an IRSA role",
+        )
 
     receive = _resource(documents, "StatefulSet", "thanos-receive")
     store = _resource(documents, "StatefulSet", "thanos-store")
@@ -81,6 +112,26 @@ def validate(manifest: str) -> None:
     _require("replicas: 2" in store, "Store Gateway must have two replicas")
     _require("replicas: 2" in query, "Query must have two replicas")
     _require("replicas: 1" in compact, "Compactor must remain a singleton")
+
+    if eks_storage_key in documents:
+        _require(
+            "storageClassName: thermoform-ebs-gp3" in receive,
+            "Receive must use the encrypted EBS StorageClass",
+        )
+        _require(
+            "storageClassName: thermoform-ebs-gp3" in compact,
+            "Compactor must use the encrypted EBS StorageClass",
+        )
+        storage_class = documents[eks_storage_key]
+        for requirement in (
+            "provisioner: ebs.csi.aws.com",
+            "type: gp3",
+            'encrypted: "true"',
+            "reclaimPolicy: Retain",
+            "allowVolumeExpansion: true",
+            "volumeBindingMode: WaitForFirstConsumer",
+        ):
+            _require(requirement in storage_class, f"unsafe EBS StorageClass: {requirement}")
 
     for name, workload in {
         "Receive": receive,
@@ -147,6 +198,8 @@ def validate(manifest: str) -> None:
         "hostnetwork: true",
         "hostpath:",
         "privileged: true",
+        "replace_with_",
+        "000000000000",
     ):
         _require(forbidden not in lowered, f"forbidden manifest content: {forbidden}")
 
@@ -159,7 +212,8 @@ def main() -> int:
         validate(args.manifest.read_text(encoding="utf-8"))
     except (OSError, ContractError) as exc:
         parser.error(str(exc))
-    print("Kubernetes observability contract is valid (24 resources).")
+    resource_count = len(_documents(args.manifest.read_text(encoding="utf-8")))
+    print(f"Kubernetes observability contract is valid ({resource_count} resources).")
     return 0
 
 

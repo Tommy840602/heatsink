@@ -365,5 +365,8 @@ def test_ci_validates_every_observability_configuration():
     assert "kustomize /workspace/infra/kubernetes/observability" in workflow
     assert "ghcr.io/yannh/kubeconform:v0.7.0" in workflow
     assert "python scripts/validate_kubernetes_observability.py" in workflow
+    assert "kustomize /workspace/infra/kubernetes/overlays/aws-eks" in workflow
+    assert "python scripts/render_eks_thanos_manifest.py" in workflow
+    assert "arn:aws:iam::123456789012:role/thermoform-thanos-receive" in workflow
     assert "THERMOFORM_THANOS_OBJECT_STORE_CONFIG" in workflow
     assert "access_key:|secret_key:|session_token:" in workflow

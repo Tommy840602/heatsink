@@ -330,6 +330,17 @@ The PDBs apply to voluntary disruptions only. They cannot protect against direct
 
 Rollback the workload manifests without deleting PVCs, the object-store Secret, or bucket blocks. The Receive and Compactor StatefulSets retain their claims. If the rollback changes bucket or prefix, stop and prove that old and new history have not split before proceeding; never point a second Compactor at the same bucket as a rollback shortcut.
 
+### Standard Amazon EKS gate
+
+Use `infra/kubernetes/overlays/aws-eks` only with standard EKS managed nodes and the `ebs.csi.aws.com` driver; EKS Auto Mode uses a different storage provisioner and needs a separate reviewed overlay.
+
+1. Render the overlay template, then bind three complete and distinct IRSA role ARNs with `scripts/render_eks_thanos_manifest.py`. Never apply the raw placeholder template.
+2. Confirm each role trust policy is restricted to the exact namespace and ServiceAccount subject. Restrict node IMDS so IRSA workloads cannot inherit the broader node role.
+3. Apply and review `thermoform-ebs-gp3`, then run `scripts/preflight_eks_thanos.py --context <exact-context>`. The preflight is read-only and must report `ready`, at least three zones, and EBS CSI registration on every eligible node.
+4. Validate the 25-resource output with Kubeconform and `scripts/validate_kubernetes_observability.py`. Confirm only Receive and Compactor claims use retained gp3 volumes; Store cache is rebuildable local state.
+5. Create the credential-free object-store Secret before applying workloads. After admission, verify each bucket client received the expected web-identity environment and Query received none.
+6. Complete the general Kubernetes rollout, node-drain, query, remote-write recovery, and Compactor checks above before enabling production traffic.
+
 ## Alertmanager HA failover
 
 1. Confirm both Alertmanager `/api/v2/status` endpoints report `ready` with two peers and Prometheus targets both replicas directly.

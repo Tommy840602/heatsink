@@ -5,7 +5,7 @@ This Kustomize base moves the long-term metrics path from the same-host Compose 
 ## Production prerequisites
 
 - Kubernetes 1.34 or newer, with at least three schedulable nodes in three zones labelled with `topology.kubernetes.io/zone`.
-- A default `ReadWriteOnce` StorageClass, or an environment overlay that sets `storageClassName` for the Receive, Store, and Compactor claims.
+- A default `ReadWriteOnce` StorageClass, or an environment overlay that sets `storageClassName` for the Receive and Compactor claims. Store Gateway cache is rebuildable `emptyDir` state.
 - A CNI that enforces `NetworkPolicy` and permits kubelet health probes under the selected policy implementation.
 - One strongly consistent S3-compatible bucket and prefix shared by Receive, Store Gateway, and Compactor.
 - Four independently bound workload identities. Query has no bucket access; it also has service-account token automount disabled.
@@ -123,3 +123,5 @@ kubectl -n thermoform-observability get pods -o wide
 ```
 
 `infra/kubernetes/overlays/production` is an environment-owned example path, not a checked-in universal overlay. The cloud identity, zones, StorageClass, resource sizing, and ingress trust boundary must be explicit for the target cluster.
+
+For standard Amazon EKS managed nodes, use the checked-in [`../overlays/aws-eks`](../overlays/aws-eks/README.md) overlay and its fail-closed IRSA renderer instead of inventing an environment overlay from scratch.

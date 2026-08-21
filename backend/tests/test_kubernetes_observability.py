@@ -27,6 +27,40 @@ def _render() -> str:
     ).stdout
 
 
+def _render_eks(tmp_path: Path) -> str:
+    template = tmp_path / "eks-template.yml"
+    manifest = tmp_path / "eks.yml"
+    template.write_text(
+        subprocess.run(
+            ["kubectl", "kustomize", str(ROOT / "infra/kubernetes/overlays/aws-eks")],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout,
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "python",
+            str(ROOT / "scripts/render_eks_thanos_manifest.py"),
+            "--template",
+            str(template),
+            "--receive-role-arn",
+            "arn:aws:iam::123456789012:role/thermoform-receive",
+            "--store-role-arn",
+            "arn:aws:iam::123456789012:role/thermoform-store",
+            "--compact-role-arn",
+            "arn:aws:iam::123456789012:role/thermoform-compact",
+            "--output",
+            str(manifest),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return manifest.read_text(encoding="utf-8")
+
+
 def test_rendered_kubernetes_observability_contract_is_valid():
     VALIDATOR.validate(_render())
 
@@ -42,4 +76,15 @@ def test_contract_rejects_embedded_static_credentials():
     manifest = _render() + "\naccess_key: forbidden\n"
 
     with pytest.raises(VALIDATOR.ContractError, match="access_key"):
+        VALIDATOR.validate(manifest)
+
+
+def test_rendered_eks_contract_is_valid(tmp_path):
+    VALIDATOR.validate(_render_eks(tmp_path))
+
+
+def test_eks_contract_rejects_unencrypted_ebs(tmp_path):
+    manifest = _render_eks(tmp_path).replace('encrypted: "true"', 'encrypted: "false"')
+
+    with pytest.raises(VALIDATOR.ContractError, match="encrypted"):
         VALIDATOR.validate(manifest)
