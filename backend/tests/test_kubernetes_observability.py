@@ -61,6 +61,19 @@ def _render_eks(tmp_path: Path) -> str:
     return manifest.read_text(encoding="utf-8")
 
 
+def _render_self_hosted() -> str:
+    return subprocess.run(
+        [
+            "kubectl",
+            "kustomize",
+            str(ROOT / "infra/kubernetes/overlays/rke2-ceph-openbao"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
 def test_rendered_kubernetes_observability_contract_is_valid():
     VALIDATOR.validate(_render())
 
@@ -87,4 +100,24 @@ def test_eks_contract_rejects_unencrypted_ebs(tmp_path):
     manifest = _render_eks(tmp_path).replace('encrypted: "true"', 'encrypted: "false"')
 
     with pytest.raises(VALIDATOR.ContractError, match="encrypted"):
+        VALIDATOR.validate(manifest)
+
+
+def test_rendered_self_hosted_contract_is_valid():
+    VALIDATOR.validate(_render_self_hosted())
+
+
+def test_self_hosted_contract_rejects_shared_openbao_role():
+    manifest = _render_self_hosted().replace(
+        "roleName: thanos-store", "roleName: thanos-receive"
+    )
+
+    with pytest.raises(VALIDATOR.ContractError, match="thanos-store OpenBao"):
+        VALIDATOR.validate(manifest)
+
+
+def test_self_hosted_contract_rejects_writable_secret_file():
+    manifest = _render_self_hosted().replace("filePermission: 0400", "filePermission: 0644", 1)
+
+    with pytest.raises(VALIDATOR.ContractError, match="OpenBao secret"):
         VALIDATOR.validate(manifest)

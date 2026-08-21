@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "generated_on": "2026-08-22",
+  "kubernetes_schema": "1.36.0",
+  "components": {
+    "rke2": {
+      "version": "v1.36.3+rke2r1",
+      "git_commit": "c4f306e6c5fa18dfb447bf6b8a0423f2da68c939",
+      "release": "https://github.com/rancher/rke2/releases/tag/v1.36.3%2Brke2r1"
+    },
+    "rook_operator": {
+      "repository": "https://charts.rook.io/release",
+      "chart": "rook-ceph",
+      "version": "v1.20.6",
+      "digest": "83a16ee19dd8d621df4159504b33585d80da1bf7ed83c734a9e8d4828c724353"
+    },
+    "rook_cluster": {
+      "repository": "https://charts.rook.io/release",
+      "chart": "rook-ceph-cluster",
+      "version": "v1.20.6",
+      "digest": "770a7ff55c773a20c192148f621551f5e201d940b9b5fd87dd7b63e5987381e5"
+    },
+    "ceph": {
+      "image": "quay.io/ceph/ceph:v20.2.4"
+    },
+    "cert_manager": {
+      "repository": "https://charts.jetstack.io",
+      "chart": "cert-manager",
+      "version": "v1.21.1",
+      "digest": "c27101f3f3e2349fb4a9e704316105bf7b52ad73b8c8257d3498ef7f2f6a4adc"
+    },
+    "secrets_store_csi_driver": {
+      "repository": "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts",
+      "chart": "secrets-store-csi-driver",
+      "version": "1.6.0",
+      "digest": "63a35e803d78a07df990411fc2df66d1f9426ed4508cc5794b5b4f125bb50744"
+    },
+    "openbao": {
+      "repository": "https://openbao.github.io/openbao-helm",
+      "chart": "openbao",
+      "version": "0.29.2",
+      "app_version": "2.6.2",
+      "digest": "dc6c523aa895eb65b25aa31ad370d2facefb709d27d8020cec4177ac1524bea4"
+    },
+    "keycloak": {
+      "version": "26.7.2",
+      "operator_git_commit": "54d5643fffa940e2306c7ac173eaa0a8795dd53f",
+      "operator_source": "https://github.com/keycloak/keycloak-k8s-resources/tree/26.7.2/kubernetes"
+    },
+    "harbor": {
+      "repository": "https://helm.goharbor.io",
+      "chart": "harbor",
+      "version": "1.19.2",
+      "app_version": "2.15.2",
+      "digest": "36d8eeb41b4df1aeff18c9af7709110a2fac2194b491d37957822b3359cd5e9a"
+    }
+  }
+}

@@ -330,6 +330,23 @@ The PDBs apply to voluntary disruptions only. They cannot protect against direct
 
 Rollback the workload manifests without deleting PVCs, the object-store Secret, or bucket blocks. The Receive and Compactor StatefulSets retain their claims. If the rollback changes bucket or prefix, stop and prove that old and new history have not split before proceeding; never point a second Compactor at the same bucket as a rollback shortcut.
 
+### Self-hosted RKE2, Ceph, and OpenBao gate
+
+The preferred AWS-independent environment is defined under `infra/self-hosted` and `infra/kubernetes/overlays/rke2-ceph-openbao`. The configuration is deliberately not directly installable until an operator supplies an audited disk inventory, DNS/TLS, HA PostgreSQL, HA Valkey, and offline recovery custody.
+
+1. Verify the exact RKE2, Rook/Ceph, OpenBao, Keycloak, Harbor, cert-manager, and Secrets Store CSI versions and digests in `stack-lock.json`. Mirror verified artifacts to Harbor only after the registry recovery set exists; mutable tags alone are not release evidence.
+2. Build a three-server RKE2 control plane behind a stable TCP VIP and at least three worker/storage nodes in distinct labelled failure domains. Confirm etcd quorum, CIS profile, encrypted Secrets, API audit logging, compressed snapshots, and an isolated restore before installing storage.
+3. Review every Ceph disk by host, serial, size, health, and stable `/dev/disk/by-id` path. `useAllNodes`, `useAllDevices`, and device hotplug must remain disabled. Stop if the private environment override can select an OS or unapproved disk.
+4. Install the pinned Rook operator and Ceph cluster. Require `HEALTH_OK`, three monitors, two managers, encrypted OSDs, three-copy RBD, retained pools/PVCs/snapshots, two TLS RGW instances, and an external copy of critical data.
+5. Install cert-manager and Secrets Store CSI, then OpenBao as three TLS-enabled Raft members in its restricted namespace. Install the OpenBao CSI Provider as a separate external-mode release in `kube-system`; it receives only the CA trust bundle and the NetworkPolicy permits only its labelled pods. Initialize OpenBao exactly once, distribute unseal/recovery shares to independent offline custodians, enable audit output, take an encrypted Raft snapshot, and rehearse recovery before storing application secrets.
+6. Configure separate OpenBao Kubernetes auth roles and KV paths for Receive, Store, and Compactor. Store receives list/read only; Receive receives list/read/write without delete; Compactor alone receives delete. Query must have no SecretProviderClass.
+7. Render the 27-resource self-hosted overlay. Kubeconform may skip only the three SecretProviderClass CRs; `scripts/validate_kubernetes_observability.py` must validate their provider, role, path, file mode, CSI volume, and Ceph StorageClass contracts.
+8. Test Ceph RGW permissions using disposable buckets/prefixes before writing live Thanos data. Confirm TLS validation remains enabled and no static S3 credential or generated `object-store.yml` is committed.
+9. Perform the general three-zone rollout, node eviction, remote-write recovery, recent/historical query, and singleton Compactor checks. A healthy render or `HEALTH_OK` alone does not prove application recovery.
+10. Block upgrades while Ceph is degraded, OpenBao lacks quorum, any database restore rehearsal is stale, or independent backups cannot be read without the live cluster.
+
+Keycloak and Harbor are downstream consumers of the same foundation, not dependencies for RKE2 or Ceph recovery. Keycloak requires an external PostgreSQL database and TLS. Harbor requires external PostgreSQL/Valkey, internal TLS, Ceph RGW, and two or more replicas. Losing Harbor must not prevent RKE2, Ceph, OpenBao, PostgreSQL, or Harbor itself from being restored from independently retained artifacts.
+
 ### Standard Amazon EKS gate
 
 Use `infra/kubernetes/overlays/aws-eks` only with standard EKS managed nodes and the `ebs.csi.aws.com` driver; EKS Auto Mode uses a different storage provisioner and needs a separate reviewed overlay.

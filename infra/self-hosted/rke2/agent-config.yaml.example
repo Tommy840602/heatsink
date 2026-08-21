@@ -1,0 +1,7 @@
+# Copy to /etc/rancher/rke2/config.yaml on worker/storage nodes.
+server: https://rke2-api.thermoform.internal:9345
+token-file: /etc/rancher/rke2/token
+protect-kernel-defaults: true
+node-label:
+  - node-role.thermoform.io/worker=true
+  - topology.kubernetes.io/zone=REPLACE_WITH_FAILURE_DOMAIN

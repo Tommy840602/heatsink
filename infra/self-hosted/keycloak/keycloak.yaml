@@ -1,0 +1,42 @@
+apiVersion: k8s.keycloak.org/v2beta1
+kind: Keycloak
+metadata:
+  name: thermoform-keycloak
+  namespace: keycloak
+spec:
+  instances: 3
+  db:
+    vendor: postgres
+    host: postgresql-primary.database.svc.cluster.local
+    port: 5432
+    database: keycloak
+    schema: public
+    usernameSecret:
+      name: keycloak-database
+      key: username
+    passwordSecret:
+      name: keycloak-database
+      key: password
+    poolInitialSize: 5
+    poolMinSize: 5
+    poolMaxSize: 30
+  hostname:
+    hostname: https://auth.thermoform.internal
+    strict: true
+  http:
+    httpEnabled: false
+    tlsSecret: keycloak-server-tls
+  ingress:
+    enabled: true
+    className: nginx
+  networkPolicy:
+    enabled: true
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  transaction:
+    xaEnabled: false

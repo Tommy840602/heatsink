@@ -1,0 +1,2 @@
+# Merge with server-config.yaml.example only on the second and third servers.
+server: https://rke2-api.thermoform.internal:9345

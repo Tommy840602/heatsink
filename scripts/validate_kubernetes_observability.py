@@ -43,7 +43,13 @@ def _resource(documents: dict[tuple[str, str], str], kind: str, name: str) -> st
 def validate(manifest: str) -> None:
     documents = _documents(manifest)
     eks_storage_key = ("StorageClass", "thermoform-ebs-gp3")
-    expected_resources = 25 if eks_storage_key in documents else 24
+    self_hosted_secret_keys = {
+        ("SecretProviderClass", "thanos-receive-object-store"),
+        ("SecretProviderClass", "thanos-store-object-store"),
+        ("SecretProviderClass", "thanos-compact-object-store"),
+    }
+    self_hosted = self_hosted_secret_keys.issubset(documents)
+    expected_resources = 27 if self_hosted else 25 if eks_storage_key in documents else 24
     _require(
         len(documents) == expected_resources,
         f"expected {expected_resources} resources, found {len(documents)}",
@@ -91,6 +97,23 @@ def validate(manifest: str) -> None:
             "Query must not have an IRSA role",
         )
 
+    if self_hosted:
+        expected_roles = {
+            "thanos-receive": "kv/data/thanos/receive",
+            "thanos-store": "kv/data/thanos/store",
+            "thanos-compact": "kv/data/thanos/compact",
+        }
+        for name, secret_path in expected_roles.items():
+            provider = _resource(documents, "SecretProviderClass", f"{name}-object-store")
+            for requirement in (
+                "provider: openbao",
+                f"roleName: {name}",
+                f"secretPath: {secret_path}",
+                "secretKey: object-store.yml",
+                "filePermission: 0400",
+            ):
+                _require(requirement in provider, f"unsafe {name} OpenBao secret contract")
+
     receive = _resource(documents, "StatefulSet", "thanos-receive")
     store = _resource(documents, "StatefulSet", "thanos-store")
     query = _resource(documents, "Deployment", "thanos-query")
@@ -133,15 +156,32 @@ def validate(manifest: str) -> None:
         ):
             _require(requirement in storage_class, f"unsafe EBS StorageClass: {requirement}")
 
+    if self_hosted:
+        for name, workload in {
+            "Receive": receive,
+            "Store Gateway": store,
+            "Compactor": compact,
+        }.items():
+            _require(
+                "driver: secrets-store.csi.k8s.io" in workload,
+                f"{name} must mount its OpenBao CSI secret",
+            )
+        for workload in (receive, compact):
+            _require(
+                "storageClassName: thermoform-ceph-block" in workload,
+                "persistent Thanos state must use the retained Ceph block class",
+            )
+
     for name, workload in {
         "Receive": receive,
         "Store Gateway": store,
         "Compactor": compact,
     }.items():
-        _require(
-            "secretName: thermoform-thanos-object-store" in workload,
-            f"{name} must use the shared object-store Secret",
-        )
+        if not self_hosted:
+            _require(
+                "secretName: thermoform-thanos-object-store" in workload,
+                f"{name} must use the shared object-store Secret",
+            )
     _require(
         "secretName: thermoform-thanos-object-store" not in query,
         "Query must not receive object-store credentials",
@@ -188,11 +228,14 @@ def validate(manifest: str) -> None:
     _require("thermoform.io/metrics-read: \"true\"" in read_policy, "missing read namespace selector")
 
     lowered = manifest.lower()
+    _require(
+        re.search(r"(?m)^kind:\s*secret\s*$", lowered) is None,
+        "forbidden manifest content: kind: secret",
+    )
     for forbidden in (
         "access_key:",
         "secret_key:",
         "session_token:",
-        "kind: secret",
         "type: loadbalancer",
         "type: nodeport",
         "hostnetwork: true",

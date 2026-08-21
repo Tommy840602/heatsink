@@ -1,0 +1,37 @@
+global:
+  enabled: true
+  tlsDisable: false
+  externalBaoAddr: https://openbao.openbao.svc:8200
+
+injector:
+  enabled: false
+
+csi:
+  enabled: true
+  volumes:
+    - name: openbao-ca
+      secret:
+        defaultMode: 288
+        secretName: openbao-client-ca
+        items:
+          - key: ca.crt
+            path: ca.crt
+  volumeMounts:
+    - name: openbao-ca
+      mountPath: /openbao/tls
+      readOnly: true
+  agent:
+    enabled: true
+    extraArgs:
+      - -ca-cert=/openbao/tls/ca.crt
+  daemonSet:
+    updateStrategy:
+      type: RollingUpdate
+      maxUnavailable: "1"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

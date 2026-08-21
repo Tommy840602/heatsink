@@ -23,7 +23,10 @@ on:
       - scripts/validate_aws_bootstrap.py
       - scripts/audit_aws_bootstrap.py
       - scripts/validate_aws_bootstrap_audit.py
+      - scripts/validate_self_hosted_stack.py
       - backend/tests/test_aws_bootstrap*.py
+      - backend/tests/test_self_hosted_stack.py
+      - backend/tests/test_kubernetes_observability.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
   push:
@@ -50,7 +53,10 @@ on:
       - scripts/validate_aws_bootstrap.py
       - scripts/audit_aws_bootstrap.py
       - scripts/validate_aws_bootstrap_audit.py
+      - scripts/validate_self_hosted_stack.py
       - backend/tests/test_aws_bootstrap*.py
+      - backend/tests/test_self_hosted_stack.py
+      - backend/tests/test_kubernetes_observability.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
 
@@ -148,6 +154,57 @@ jobs:
             backend/tests/test_aws_bootstrap.py \
             backend/tests/test_aws_bootstrap_audit.py \
             backend/tests/test_aws_bootstrap_audit_contract.py
+
+      - name: Validate self-hosted production foundation
+        run: |
+          runtime_dir="$(mktemp -d)"
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
+            alpine/helm:3.19.0 template rook-ceph rook-ceph \
+            --repo https://charts.rook.io/release --version v1.20.6 \
+            --namespace rook-ceph --include-crds \
+            -f infra/self-hosted/helm/rook-operator-values.yaml \
+            > "$runtime_dir/rook-operator.yaml"
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
+            alpine/helm:3.19.0 template rook-ceph-cluster rook-ceph-cluster \
+            --repo https://charts.rook.io/release --version v1.20.6 \
+            --namespace rook-ceph \
+            -f infra/self-hosted/helm/rook-cluster-values.yaml \
+            > "$runtime_dir/rook-cluster.yaml"
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
+            alpine/helm:3.19.0 template openbao openbao \
+            --repo https://openbao.github.io/openbao-helm --version 0.29.2 \
+            --namespace openbao -f infra/self-hosted/helm/openbao-values.yaml \
+            > "$runtime_dir/openbao.yaml"
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
+            alpine/helm:3.19.0 template openbao-csi openbao \
+            --repo https://openbao.github.io/openbao-helm --version 0.29.2 \
+            --namespace kube-system \
+            -f infra/self-hosted/helm/openbao-csi-values.yaml \
+            > "$runtime_dir/openbao-csi.yaml"
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
+            alpine/helm:3.19.0 template harbor harbor \
+            --repo https://helm.goharbor.io --version 1.19.2 \
+            --namespace harbor -f infra/self-hosted/helm/harbor-values.yaml \
+            > "$runtime_dir/harbor.yaml"
+          docker run --rm -v "$PWD:/workspace:ro" \
+            registry.k8s.io/kubectl:v1.36.3 \
+            kustomize /workspace/infra/kubernetes/overlays/rke2-ceph-openbao \
+            > "$runtime_dir/thanos.yaml"
+          docker run --rm \
+            -v "$runtime_dir/thanos.yaml:/work/manifests.yaml:ro" \
+            ghcr.io/yannh/kubeconform:v0.7.0 \
+            -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.36.0 /work/manifests.yaml
+          python scripts/validate_self_hosted_stack.py \
+            --rook-cluster "$runtime_dir/rook-cluster.yaml" \
+            --openbao "$runtime_dir/openbao.yaml" \
+            --openbao-csi "$runtime_dir/openbao-csi.yaml" \
+            --harbor "$runtime_dir/harbor.yaml"
+          python scripts/validate_kubernetes_observability.py \
+            "$runtime_dir/thanos.yaml"
+          python -m pytest -q \
+            backend/tests/test_self_hosted_stack.py \
+            backend/tests/test_kubernetes_observability.py
 
       - name: Render credential-free production S3 configuration
         run: |

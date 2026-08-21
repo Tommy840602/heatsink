@@ -1,0 +1,131 @@
+global:
+  enabled: true
+  tlsDisable: false
+
+injector:
+  enabled: false
+
+csi:
+  enabled: false
+
+server:
+  image:
+    repository: quay.io/openbao/openbao
+    tag: "2.6.2"
+    pullPolicy: IfNotPresent
+  updateStrategyType: OnDelete
+  logLevel: info
+  logFormat: json
+  readinessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
+  livenessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+  terminationGracePeriodSeconds: 30
+  dataStorage:
+    enabled: true
+    size: 20Gi
+    storageClass: thermoform-ceph-block
+    accessMode: ReadWriteOnce
+  auditStorage:
+    enabled: true
+    size: 20Gi
+    storageClass: thermoform-ceph-block
+    accessMode: ReadWriteOnce
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  standalone:
+    enabled: false
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = false
+        listener "tcp" {
+          tls_disable = 0
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/openbao/tls/tls.crt"
+          tls_key_file = "/openbao/tls/tls.key"
+          tls_client_ca_file = "/openbao/tls/ca.crt"
+          telemetry {
+            unauthenticated_metrics_access = false
+          }
+        }
+        storage "raft" {
+          path = "/openbao/data"
+        }
+        service_registration "kubernetes" {}
+    disruptionBudget:
+      enabled: true
+      maxUnavailable: 1
+  volumes:
+    - name: server-tls
+      secret:
+        defaultMode: 288
+        secretName: openbao-server-tls
+  volumeMounts:
+    - name: server-tls
+      mountPath: /openbao/tls
+      readOnly: true
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+              app.kubernetes.io/instance: openbao
+              component: server
+          topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: openbao
+          app.kubernetes.io/instance: openbao
+          component: server
+  networkPolicy:
+    enabled: true
+    ingress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                openbao-access: "true"
+        ports:
+          - port: 8200
+            protocol: TCP
+      - from:
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/name: openbao
+        ports:
+          - port: 8200
+            protocol: TCP
+          - port: 8201
+            protocol: TCP
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kube-system
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: openbao-csi-provider
+        ports:
+          - port: 8200
+            protocol: TCP
+  serviceAccount:
+    create: true
+    name: openbao
+    createSecret: false
+    serviceDiscovery:
+      enabled: true
+
+ui:
+  enabled: false

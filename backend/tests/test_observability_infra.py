@@ -370,5 +370,13 @@ def test_ci_validates_every_observability_configuration():
     assert "arn:aws:iam::123456789012:role/thermoform-thanos-receive" in workflow
     assert "hashicorp/terraform:1.15.8" in workflow
     assert "python scripts/validate_terraform_thanos.py" in workflow
+    assert "alpine/helm:3.19.0" in workflow
+    assert "template rook-ceph-cluster rook-ceph-cluster" in workflow
+    assert "--repo https://openbao.github.io/openbao-helm" in workflow
+    assert "template openbao-csi openbao" in workflow
+    assert "--repo https://helm.goharbor.io" in workflow
+    assert "kustomize /workspace/infra/kubernetes/overlays/rke2-ceph-openbao" in workflow
+    assert "python scripts/validate_self_hosted_stack.py" in workflow
+    assert "-kubernetes-version 1.36.0" in workflow
     assert "THERMOFORM_THANOS_OBJECT_STORE_CONFIG" in workflow
     assert "access_key:|secret_key:|session_token:" in workflow

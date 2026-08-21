@@ -1,0 +1,20 @@
+# Copy to /etc/rancher/rke2/config.yaml on every control-plane node.
+# The first server omits `server`; joining servers add the stable registration URL.
+profile: cis
+token-file: /etc/rancher/rke2/token
+write-kubeconfig-mode: "0600"
+tls-san:
+  - rke2-api.thermoform.internal
+secrets-encryption: true
+secrets-encryption-provider: secretbox
+protect-kernel-defaults: true
+audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
+etcd-snapshot-schedule-cron: "0 */6 * * *"
+etcd-snapshot-retention: 28
+etcd-snapshot-compress: true
+node-taint:
+  - CriticalAddonsOnly=true:NoExecute
+cni: canal
+disable-cloud-controller: true
+node-label:
+  - node-role.thermoform.io/control-plane=true

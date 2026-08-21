@@ -1,0 +1,32 @@
+crds:
+  enabled: true
+
+image:
+  repository: docker.io/rook/ceph
+  tag: v1.20.6
+  pullPolicy: IfNotPresent
+
+rbacEnable: true
+allowLoopDevices: false
+monRunAsRoot: false
+deleteUnusedCrushRules: true
+currentNamespaceOnly: true
+enableDiscoveryDaemon: false
+disableDeviceHotplug: true
+logLevel: INFO
+
+csi:
+  installCsiOperator: true
+  serviceMonitor:
+    enabled: false
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+monitoring:
+  enabled: false

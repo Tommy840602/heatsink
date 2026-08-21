@@ -1,0 +1,128 @@
+expose:
+  type: ingress
+  tls:
+    enabled: true
+    certSource: secret
+    secret:
+      secretName: harbor-ingress-tls
+  ingress:
+    hosts:
+      core: harbor.thermoform.internal
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+
+externalURL: https://harbor.thermoform.internal
+
+persistence:
+  enabled: true
+  resourcePolicy: keep
+  persistentVolumeClaim:
+    jobservice:
+      jobLog:
+        storageClass: thermoform-ceph-block
+        accessMode: ReadWriteOnce
+        size: 10Gi
+    trivy:
+      storageClass: thermoform-ceph-block
+      accessMode: ReadWriteOnce
+      size: 20Gi
+  imageChartStorage:
+    type: s3
+    disableredirect: true
+    caBundleSecretName: thermoform-rgw-ca
+    s3:
+      existingSecret: harbor-registry-s3
+      region: self-hosted
+      bucket: thermoform-harbor
+      regionendpoint: https://rook-ceph-rgw-thermoform-objectstore.rook-ceph.svc:443
+      encrypt: true
+      secure: true
+      skipverify: false
+      v4auth: true
+      rootdirectory: /registry
+
+existingSecretAdminPassword: harbor-admin
+existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
+existingSecretSecretKey: harbor-core-secret
+
+internalTLS:
+  enabled: true
+  certSource: secret
+  trustCa: ""
+  core:
+    secretName: harbor-core-tls
+  jobservice:
+    secretName: harbor-jobservice-tls
+  registry:
+    secretName: harbor-registry-tls
+  portal:
+    secretName: harbor-portal-tls
+  trivy:
+    secretName: harbor-trivy-tls
+
+portal:
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+core:
+  replicas: 2
+  existingSecret: harbor-core-runtime
+  existingXsrfSecret: harbor-core-xsrf
+  secretName: harbor-token-service
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+jobservice:
+  replicas: 2
+  existingSecret: harbor-jobservice-runtime
+  jobLogger: database
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+registry:
+  replicas: 2
+  existingSecret: harbor-registry-runtime
+  credentials:
+    existingSecret: harbor-registry-credentials
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+trivy:
+  enabled: true
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+database:
+  type: external
+  external:
+    host: postgresql-primary.database.svc.cluster.local
+    port: "5432"
+    username: harbor
+    coreDatabase: harbor
+    existingSecret: harbor-database
+    sslmode: verify-full
+
+redis:
+  type: external
+  external:
+    addr: valkey-0.valkey-headless.database.svc.cluster.local:26379,valkey-1.valkey-headless.database.svc.cluster.local:26379,valkey-2.valkey-headless.database.svc.cluster.local:26379
+    sentinelMasterSet: thermoform
+    tlsOptions:
+      enable: true
+      caBundleSecretName: valkey-ca
+    existingSecret: harbor-valkey
+
+exporter:
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1

@@ -1,0 +1,135 @@
+operatorNamespace: rook-ceph
+
+cephImage:
+  repository: quay.io/ceph/ceph
+  tag: v20.2.4
+  allowUnsupported: false
+
+cephClusterSpec:
+  dataDirHostPath: /var/lib/rook
+  skipUpgradeChecks: false
+  continueUpgradeAfterChecksEvenIfNotHealthy: false
+  waitTimeoutForHealthyOSDInMinutes: 30
+  upgradeOSDRequiresHealthyPGs: true
+  mon:
+    count: 3
+    allowMultiplePerNode: false
+  mgr:
+    count: 2
+    allowMultiplePerNode: false
+  dashboard:
+    enabled: true
+    ssl: true
+  crashCollector:
+    disable: false
+  cleanupPolicy:
+    confirmation: ""
+    sanitizeDisks:
+      method: quick
+      dataSource: zero
+      iteration: 1
+    allowUninstallWithVolumes: false
+  removeOSDsIfOutAndSafeToRemove: false
+  storage:
+    useAllNodes: false
+    useAllDevices: false
+    config:
+      encryptedDevice: "true"
+    # Intentionally empty. An operator must add explicit node names and stable
+    # /dev/disk/by-id device paths after proving every target disk is disposable.
+    nodes: []
+  disruptionManagement:
+    managePodBudgets: true
+    osdMaintenanceTimeout: 30
+  healthCheck:
+    daemonHealth:
+      mon:
+        disabled: false
+        interval: 45s
+      osd:
+        disabled: false
+        interval: 60s
+      status:
+        disabled: false
+        interval: 60s
+    livenessProbe:
+      mon:
+        disabled: false
+      mgr:
+        disabled: false
+      osd:
+        disabled: false
+
+ingress:
+  dashboard: {}
+
+cephBlockPools:
+  - name: thermoform-blockpool
+    spec:
+      failureDomain: host
+      replicated:
+        size: 3
+        requireSafeReplicaSize: true
+    storageClass:
+      enabled: true
+      name: thermoform-ceph-block
+      isDefault: false
+      reclaimPolicy: Retain
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+      parameters:
+        imageFormat: "2"
+        imageFeatures: layering
+        csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+        csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+        csi.storage.k8s.io/controller-publish-secret-name: rook-csi-rbd-provisioner
+        csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
+        csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+        csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+        csi.storage.k8s.io/fstype: ext4
+
+cephFileSystems: []
+
+cephBlockPoolsVolumeSnapshotClass:
+  enabled: true
+  name: thermoform-ceph-block
+  isDefault: false
+  deletionPolicy: Retain
+
+cephObjectStores:
+  - name: thermoform-objectstore
+    spec:
+      metadataPool:
+        failureDomain: host
+        replicated:
+          size: 3
+          requireSafeReplicaSize: true
+      dataPool:
+        failureDomain: host
+        erasureCoded:
+          dataChunks: 2
+          codingChunks: 1
+      preservePoolsOnDelete: true
+      gateway:
+        securePort: 443
+        sslCertificateRef: thermoform-rgw-tls
+        instances: 2
+        priorityClassName: system-cluster-critical
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+    storageClass:
+      enabled: true
+      name: thermoform-ceph-bucket
+      reclaimPolicy: Retain
+      volumeBindingMode: Immediate
+      parameters:
+        region: self-hosted
+    ingress:
+      enabled: false
