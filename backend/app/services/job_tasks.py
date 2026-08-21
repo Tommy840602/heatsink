@@ -83,9 +83,11 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
         return result
     if task == "cae_campaign":
         from app.domain.cae import OpenFoamCampaignRequest
+        from app.services.cae_resume import validate_issued_resume_request
         from app.services.openfoam_campaign import run_openfoam_campaign
 
         request = OpenFoamCampaignRequest.model_validate(payload)
+        validate_issued_resume_request(request, repository)
 
         def campaign_progress(current: int, total: int, stage: str) -> None:
             value = min(95, 10 + round(85 * current / max(total, 1)))

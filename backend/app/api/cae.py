@@ -1,12 +1,13 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
+from redis.exceptions import RedisError
 
 from app.domain.cae import OpenFoamCampaignRequest, OpenFoamCaseRequest
 from app.repositories.artifacts import ArtifactRepository
 from app.services.openfoam import prepare_openfoam_case
-from app.services.jobs import CAE_QUEUE_NAME
+from app.services.jobs import CAE_QUEUE_NAME, JobQueue, get_job_queue
 from app.services.openfoam_benchmark import OPENFOAM_TARGET, TUTORIAL_RELATIVE_PATH
 from app.services.cae_history import (
     list_campaign_reports,
@@ -14,7 +15,7 @@ from app.services.cae_history import (
     load_campaign_report,
     load_mesh_study_report,
 )
-from app.services.cae_resume import preview_campaign_resume
+from app.services.cae_resume import enqueue_campaign_resume, preview_campaign_resume
 
 
 router = APIRouter(prefix="/api/v1")
@@ -76,6 +77,26 @@ def campaign_resume_preview(
         return preview_campaign_resume(campaign_id, request, repository)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
+
+
+@router.post("/cae/campaigns/{campaign_id}/resume")
+def campaign_resume(
+    campaign_id: str,
+    request: OpenFoamCampaignRequest,
+    response: Response,
+    queue: JobQueue = Depends(get_job_queue),
+) -> dict[str, Any]:
+    try:
+        result = enqueue_campaign_resume(campaign_id, request, repository, queue)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
+    if result["resume_ready"]:
+        response.status_code = status.HTTP_202_ACCEPTED
+    return result
 
 
 @router.get("/cae/mesh-studies")

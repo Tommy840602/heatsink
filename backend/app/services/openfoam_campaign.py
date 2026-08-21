@@ -9,7 +9,7 @@ from app.services.openfoam import OPENFOAM_TEMPLATE_VERSION
 from app.services.openfoam_solve import run_openfoam_solve
 
 
-CAMPAIGN_CONTRACT_VERSION = "cht-campaign-v1"
+CAMPAIGN_CONTRACT_VERSION = "cht-campaign-v2"
 ProgressCallback = Callable[[int, int, str], None]
 CancelCheck = Callable[[], bool]
 SolveRunner = Callable[[OpenFoamSolveRequest, ArtifactRepository], dict[str, Any]]
@@ -92,6 +92,7 @@ def run_openfoam_campaign(
     started = time.monotonic()
     segments: list[dict[str, Any]] = []
     resume_run_id = request.resume_from_run_id
+    resume_checkpoint_time_s: float | None = None
     current_time_s = 0.0
     last_result: dict[str, Any] | None = None
     stop_reason = "segment_limit"
@@ -106,6 +107,7 @@ def run_openfoam_campaign(
                 stop_reason = "resume_case_mismatch"
             else:
                 current_time_s = float(last_result.get("latest_time_s") or 0.0)
+                resume_checkpoint_time_s = current_time_s
                 if last_result.get("results_available"):
                     stop_reason = "converged"
 
@@ -233,6 +235,18 @@ def run_openfoam_campaign(
             last_result.get("response_readiness") if last_result else None
         ),
         "resume_from_run_id": request.resume_from_run_id,
+        "lineage": (
+            {
+                "resume_attempt_id": request.resume_attempt_id,
+                "parent_campaign_id": request.parent_campaign_id,
+                "case_id": expected_case_id,
+                "checkpoint_run_id": request.resume_from_run_id,
+                "checkpoint_time_s": resume_checkpoint_time_s,
+                "requested_target_end_time_s": request.target_end_time_s,
+            }
+            if request.resume_from_run_id
+            else None
+        ),
         "next_resume_run_id": (
             last_result.get("solve_run_id")
             if last_result and last_result.get("checkpoint_created")

@@ -139,12 +139,60 @@ def test_campaign_rejects_resume_checkpoint_from_another_case(tmp_path):
     )
 
     result = run_openfoam_campaign(
-        _request(resume_from_run_id=resume_id), repository
+        _request(
+            resume_from_run_id=resume_id,
+            parent_campaign_id="campaign_deadbeefdead",
+            resume_attempt_id="resume_deadbeefdead",
+        ),
+        repository,
     )
 
     assert result["status"] == "failed"
     assert result["stop_reason"] == "resume_case_mismatch"
     assert result["results_available"] is False
+
+
+def test_resumed_campaign_persists_parent_lineage(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    resume_id = "solve_000000000001"
+    request = _request(
+        resume_from_run_id=resume_id,
+        parent_campaign_id="campaign_000000000001",
+        resume_attempt_id="resume_000000000001",
+        target_end_time_s=0.002,
+    )
+    expected_case_id = _expected_case_id(request, repository)
+    repository.save_cae_artifact(
+        resume_id,
+        "solve-report.json",
+        json.dumps(
+            {
+                "case_id": expected_case_id,
+                "solve_run_id": resume_id,
+                "latest_time_s": 0.001,
+                "checkpoint_created": True,
+                "results_available": False,
+            }
+        ),
+    )
+    calls = []
+
+    result = run_openfoam_campaign(
+        request,
+        repository,
+        solve_runner=lambda solve, repo: _fake_runner(
+            solve, repo, calls, expected_case_id
+        ),
+    )
+
+    assert result["lineage"] == {
+        "resume_attempt_id": "resume_000000000001",
+        "parent_campaign_id": "campaign_000000000001",
+        "case_id": expected_case_id,
+        "checkpoint_run_id": resume_id,
+        "checkpoint_time_s": 0.001,
+        "requested_target_end_time_s": 0.002,
+    }
 
 
 def test_campaign_requires_a_response_write_in_each_segment():
@@ -154,3 +202,8 @@ def test_campaign_requires_a_response_write_in_each_segment():
             delta_t_s=0.0001,
             write_interval_steps=10,
         )
+
+
+def test_campaign_rejects_unissued_resume_lineage():
+    with pytest.raises(ValidationError, match="server-issued"):
+        _request(resume_from_run_id="solve_deadbeefdead")

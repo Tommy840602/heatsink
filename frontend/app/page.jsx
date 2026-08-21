@@ -499,7 +499,7 @@ function ModuleView({
     setResumePreview(null);
     notify(`Checking ${campaign.campaign_id} against the current design and checkpoint`);
     try {
-      const preview = await api.previewCaeResume(
+      const resume = await api.resumeCaeCampaign(
         campaign.campaign_id,
         cadDesign,
         {
@@ -510,15 +510,15 @@ function ModuleView({
           max_segments: Number(maxSegments),
         },
       );
-      setResumePreview(preview);
-      if (!preview.resume_ready) {
-        notify(`Resume blocked · ${preview.detail}`);
+      setResumePreview(resume);
+      if (!resume.resume_ready) {
+        notify(`Resume blocked · ${resume.detail}`);
         return;
       }
-      const job = await api.startCaeResume(preview.resume_payload);
+      const job = resume.job;
       window.localStorage.setItem(activeCaeJobStorageKey, job.job_id);
       setResumeChecking(false);
-      notify(`Resume validated · continuing from ${preview.resume_from_run_id}`);
+      notify(`Resume queued · ${resume.resume_attempt_id}`);
       await monitorCaeJob(job);
     } catch {
       notify("Resume preflight or CAE queue is unavailable");
@@ -1831,13 +1831,16 @@ function ModuleView({
               <div>
                 <strong>
                   {resumePreview.resume_ready
-                    ? "Checkpoint resume validated"
+                    ? "Checkpoint resume validated & queued"
                     : `Resume blocked · ${readableState(resumePreview.reason)}`}
                 </strong>
                 <p>{resumePreview.detail}</p>
                 <small>
                   {Number(resumePreview.current_time_s ?? 0).toExponential(2)} s → {Number(resumePreview.requested_target_end_time_s).toExponential(2)} s · {resumePreview.resume_from_run_id ?? "no checkpoint"}
                 </small>
+                {resumePreview.resume_attempt_id && (
+                  <small>{resumePreview.resume_attempt_id} · parent {resumePreview.campaign_id}</small>
+                )}
               </div>
             </div>
             )}

@@ -136,13 +136,11 @@ export const api = {
     ),
   startCaeCampaign: (design, settings) =>
     submitJob("cae_campaign", caeCampaignPayload(design, settings)),
-  previewCaeResume: (campaignId, design, settings) =>
-    request(`/cae/campaigns/${campaignId}/resume-preview`, {
+  resumeCaeCampaign: (campaignId, design, settings) =>
+    request(`/cae/campaigns/${campaignId}/resume`, {
       method: "POST",
       body: JSON.stringify(caeCampaignPayload(design, settings)),
     }),
-  startCaeResume: (validatedPayload) =>
-    submitJob("cae_campaign", validatedPayload),
   runMeshStudy: (campaignIds, onStatus) =>
     runJob(
       "cae_mesh_study",

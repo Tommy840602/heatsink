@@ -22,7 +22,12 @@ def queue_name_for_task(task: str) -> str:
 
 
 class JobQueue(Protocol):
-    def enqueue(self, task: str, payload: dict[str, Any]) -> dict[str, Any]: ...
+    def enqueue(
+        self,
+        task: str,
+        payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
     def get(self, job_id: str) -> dict[str, Any]: ...
     def cancel(self, job_id: str) -> dict[str, Any]: ...
 
@@ -41,12 +46,24 @@ class RqJobQueue:
             CAE_QUEUE_NAME: Queue(CAE_QUEUE_NAME, connection=self.connection, default_timeout=21600),
         }
 
-    def enqueue(self, task: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def enqueue(
+        self,
+        task: str,
+        payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         queue_name = queue_name_for_task(task)
+        metadata = metadata or {}
         job = self.queues[queue_name].enqueue_call(
             func=execute_job,
             args=(task, payload),
-            meta={"task": task, "progress": 0, "stage": "queued", "queue": queue_name},
+            meta={
+                "task": task,
+                "progress": 0,
+                "stage": "queued",
+                "queue": queue_name,
+                "lineage": metadata.get("lineage"),
+            },
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -82,6 +99,7 @@ class RqJobQueue:
             "stage": job.meta.get("stage", status),
             "queue": job.meta.get("queue", job.origin),
             "cancel_requested": bool(job.meta.get("cancel_requested", False)),
+            "lineage": job.meta.get("lineage"),
         }
 
 

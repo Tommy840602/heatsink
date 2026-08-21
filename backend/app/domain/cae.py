@@ -89,6 +89,12 @@ class OpenFoamCampaignRequest(BaseModel):
     resume_from_run_id: str | None = Field(
         default=None, pattern=r"^solve_[0-9a-f]{12}$"
     )
+    parent_campaign_id: str | None = Field(
+        default=None, pattern=r"^campaign_[0-9a-f]{12}$"
+    )
+    resume_attempt_id: str | None = Field(
+        default=None, pattern=r"^resume_[0-9a-f]{12}$"
+    )
     criteria: CaeAcceptanceCriteria = Field(default_factory=CaeAcceptanceCriteria)
 
     @model_validator(mode="after")
@@ -100,6 +106,13 @@ class OpenFoamCampaignRequest(BaseModel):
             raise ValueError(
                 "segment_duration_s must contain at least one response write interval"
             )
+        lineage = (self.parent_campaign_id, self.resume_attempt_id)
+        if self.resume_from_run_id and not all(lineage):
+            raise ValueError(
+                "resumed campaigns require server-issued parent and attempt lineage"
+            )
+        if not self.resume_from_run_id and any(lineage):
+            raise ValueError("resume lineage requires resume_from_run_id")
         return self
 
 

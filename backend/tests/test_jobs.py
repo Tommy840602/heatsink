@@ -7,7 +7,7 @@ from app.services.jobs import CAE_QUEUE_NAME, DEFAULT_QUEUE_NAME, get_job_queue,
 
 
 class FakeQueue:
-    def enqueue(self, task, payload):
+    def enqueue(self, task, payload, metadata=None):
         return {
             "job_id": "job_test123",
             "task": task,
@@ -17,6 +17,7 @@ class FakeQueue:
             "ended_at": None,
             "result": None,
             "error": None,
+            "lineage": metadata.get("lineage") if metadata else None,
         }
 
     def get(self, job_id):

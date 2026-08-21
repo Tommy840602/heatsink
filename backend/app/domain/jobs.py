@@ -31,3 +31,4 @@ class JobSnapshot(BaseModel):
     stage: str = "queued"
     queue: str = "thermoform"
     cancel_requested: bool = False
+    lineage: dict[str, Any] | None = None

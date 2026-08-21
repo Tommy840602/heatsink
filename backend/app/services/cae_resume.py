@@ -11,6 +11,7 @@ from app.services.openfoam_solve import (
     CHECKPOINT_FILENAME,
     inspect_checkpoint_metadata,
 )
+from app.services.jobs import JobQueue
 
 
 SOLVE_RUN_PATTERN = re.compile(r"^solve_[0-9a-f]{12}$")
@@ -149,9 +150,6 @@ def preview_campaign_resume(
             checkpoint_available=True,
         )
 
-    resume_request = request.model_copy(
-        update={"resume_from_run_id": resume_run_id}
-    )
     return {
         "campaign_id": campaign_id,
         "resume_ready": True,
@@ -163,5 +161,99 @@ def preview_campaign_resume(
         "requested_target_end_time_s": request.target_end_time_s,
         "resume_from_run_id": resume_run_id,
         "checkpoint_available": True,
-        "resume_payload": resume_request.model_dump(mode="json"),
+        "resume_payload": None,
     }
+
+
+def _resume_attempt_id(
+    campaign_id: str,
+    request: OpenFoamCampaignRequest,
+    preview: dict[str, Any],
+    repository: ArtifactRepository,
+) -> str:
+    return repository.version(
+        {
+            "parent_campaign_id": campaign_id,
+            "case_id": preview["case_id"],
+            "resume_from_run_id": preview["resume_from_run_id"],
+            "request": request.model_dump(mode="json"),
+        },
+        "resume",
+    )
+
+
+def enqueue_campaign_resume(
+    campaign_id: str,
+    request: OpenFoamCampaignRequest,
+    repository: ArtifactRepository,
+    queue: JobQueue,
+) -> dict[str, Any]:
+    if any(
+        (
+            request.resume_from_run_id,
+            request.parent_campaign_id,
+            request.resume_attempt_id,
+        )
+    ):
+        raise ValueError("Resume identity is issued only by the atomic resume endpoint")
+    preview = preview_campaign_resume(campaign_id, request, repository)
+    if not preview["resume_ready"]:
+        return preview
+
+    resume_attempt_id = _resume_attempt_id(
+        campaign_id, request, preview, repository
+    )
+    lineage = {
+        "resume_attempt_id": resume_attempt_id,
+        "parent_campaign_id": campaign_id,
+        "case_id": preview["case_id"],
+        "checkpoint_run_id": preview["resume_from_run_id"],
+        "checkpoint_time_s": preview["current_time_s"],
+        "requested_target_end_time_s": preview["requested_target_end_time_s"],
+    }
+    payload = {
+        **request.model_dump(mode="json"),
+        "resume_from_run_id": preview["resume_from_run_id"],
+        "parent_campaign_id": campaign_id,
+        "resume_attempt_id": resume_attempt_id,
+    }
+    job = queue.enqueue("cae_campaign", payload, metadata={"lineage": lineage})
+    return {
+        **preview,
+        "reason": "queued",
+        "detail": "Checkpoint compatibility was validated and the successor campaign was queued in one server operation.",
+        "resume_payload": None,
+        "resume_attempt_id": resume_attempt_id,
+        "lineage": lineage,
+        "job": job,
+    }
+
+
+def validate_issued_resume_request(
+    request: OpenFoamCampaignRequest,
+    repository: ArtifactRepository,
+) -> None:
+    if not request.resume_from_run_id:
+        return
+    if not request.parent_campaign_id or not request.resume_attempt_id:
+        raise ValueError("Resume request is missing server-issued lineage")
+    base_request = OpenFoamCampaignRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "resume_from_run_id": None,
+            "parent_campaign_id": None,
+            "resume_attempt_id": None,
+        }
+    )
+    preview = preview_campaign_resume(
+        request.parent_campaign_id, base_request, repository
+    )
+    expected_attempt_id = _resume_attempt_id(
+        request.parent_campaign_id, base_request, preview, repository
+    )
+    if (
+        not preview["resume_ready"]
+        or preview["resume_from_run_id"] != request.resume_from_run_id
+        or expected_attempt_id != request.resume_attempt_id
+    ):
+        raise ValueError("Resume lineage no longer matches the immutable checkpoint")
