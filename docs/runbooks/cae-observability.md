@@ -311,6 +311,25 @@ Compactor is a singleton for one bucket and is the only component authorized to 
 5. Change retention only through a reviewed maintenance change. Reducing it causes irreversible object deletion after blocks completely age out, and failed compaction/downsampling loops prevent retention from running.
 6. After rollout, verify Compactor readiness, `thanos_compact_halted == 0`, no new compaction failures, Store Gateway synchronization, and both raw and downsampled historical queries.
 
+## Kubernetes Thanos production rollout
+
+The production base is `infra/kubernetes/observability`. It is a 24-resource Kustomize topology, not a universal cloud deployment: the target environment must supply workload identities, a StorageClass, the object-store Secret, capacity decisions, and any authenticated external gateway.
+
+1. Verify Kubernetes 1.34 or newer, at least three eligible zones and nodes carrying `topology.kubernetes.io/zone`, a working default or overlaid `ReadWriteOnce` StorageClass, and an enforcing `NetworkPolicy` CNI.
+2. Render with `kubectl kustomize infra/kubernetes/observability`. Run Kubeconform against Kubernetes 1.34 and `python scripts/validate_kubernetes_observability.py <rendered-file>` before applying an environment overlay.
+3. Apply the namespace alone, render the credential-free `object-store.yml`, and create `thermoform-thanos-object-store` from that file. Never commit the rendered file or Secret. Reject `access_key`, `secret_key`, and `session_token` fields.
+4. Bind distinct cloud identities to `thanos-receive`, `thanos-store`, and `thanos-compact`; leave `thanos-query` without bucket permissions. Receive needs list/read/write without delete, Store needs list/read only, and only Compactor gets delete. Prove those boundaries from actual pods against a disposable prefix.
+5. Label Prometheus namespaces `thermoform.io/metrics-write=true` and intended Query/scrape client namespaces `thermoform.io/metrics-read=true`. Confirm no unlabelled namespace can reach the protected ports.
+6. Apply the reviewed overlay. Receive pods must land on three different nodes in three zones. Store and Query replicas must occupy separate nodes. A Pending Receive replica under fewer than three eligible zones is a topology safety signal, not a reason to weaken the base during rollout.
+7. Point Prometheus at `http://thanos-receive.thermoform-observability.svc.cluster.local:19291/api/v1/receive`. Point internal Grafana at `http://thanos-query.thermoform-observability.svc.cluster.local:10902`.
+8. Verify all three Receive pods report ready, all three fixed hashring endpoints are healthy, RF=3 writes produce three receiver replicas, both Store Gateways synchronize, Query deduplicates `replica` and `receive_replica`, and exactly one Compactor is running.
+9. Drain one Receive node through the eviction API. The Receive PDB must preserve two available pods and remote writes must continue. Repeat separately for Store and Query; never combine this with a bucket, identity, or hashring change.
+10. Close the change only after remote-write queues drain, bucket failure counters remain stable, a recent query and historical-only query both succeed, and the Compactor remains healthy without halted or failed-group counters.
+
+The PDBs apply to voluntary disruptions only. They cannot protect against direct deletion, simultaneous node loss, broken application configuration, or an unsafe controller rollout. Receive uses a fixed three-member DNS hashring and must not be autoscaled; changing its size requires a separately reviewed hashring migration or Receive Controller architecture. Compactor must remain exactly one replica.
+
+Rollback the workload manifests without deleting PVCs, the object-store Secret, or bucket blocks. The Receive and Compactor StatefulSets retain their claims. If the rollback changes bucket or prefix, stop and prove that old and new history have not split before proceeding; never point a second Compactor at the same bucket as a rollback shortcut.
+
 ## Alertmanager HA failover
 
 1. Confirm both Alertmanager `/api/v2/status` endpoints report `ready` with two peers and Prometheus targets both replicas directly.

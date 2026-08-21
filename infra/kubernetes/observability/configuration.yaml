@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-receive-hashring
+  labels:
+    app.kubernetes.io/name: thanos
+    app.kubernetes.io/component: receive
+data:
+  hashring.json: |
+    [
+      {
+        "hashring": "thermoform-production",
+        "endpoints": [
+          "thanos-receive-0.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901",
+          "thanos-receive-1.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901",
+          "thanos-receive-2.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901"
+        ]
+      }
+    ]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-query-endpoints
+  labels:
+    app.kubernetes.io/name: thanos
+    app.kubernetes.io/component: query
+data:
+  endpoints.yml: |
+    endpoints:
+      - address: thanos-receive-0.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901
+      - address: thanos-receive-1.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901
+      - address: thanos-receive-2.thanos-receive-headless.thermoform-observability.svc.cluster.local:10901
+      - address: thanos-store-0.thanos-store-headless.thermoform-observability.svc.cluster.local:10901
+      - address: thanos-store-1.thanos-store-headless.thermoform-observability.svc.cluster.local:10901
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-retention
+  labels:
+    app.kubernetes.io/name: thanos
+    app.kubernetes.io/component: compact
+data:
+  THERMOFORM_THANOS_RETENTION_RAW: 0d
+  THERMOFORM_THANOS_RETENTION_5M: 0d
+  THERMOFORM_THANOS_RETENTION_1H: 0d

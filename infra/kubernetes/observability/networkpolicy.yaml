@@ -1,0 +1,59 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-observability-internal
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-writers
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+      app.kubernetes.io/component: receive
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              thermoform.io/metrics-write: "true"
+      ports:
+        - protocol: TCP
+          port: 19291
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-readers-and-scrapers
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              thermoform.io/metrics-read: "true"
+      ports:
+        - protocol: TCP
+          port: 10902

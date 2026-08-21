@@ -56,6 +56,8 @@ Phase 3.24 adds a guarded production S3 cutover contract without weakening the d
 
 Phase 3.25 adds the singleton Thanos Compactor that owns block compaction, downsampling, and object deletion. The default retention does not age out samples (`0d`) for raw, 5-minute, and 1-hour resolutions; a startup guard accepts finite retention only when all resolutions use the same whole-day period of at least 10 days. Compactor availability, halted state, failed groups, and bucket operations are covered by alerts and Grafana, while the HA drill now proves the pinned Compactor boots against the shared bucket. Production IAM must reserve delete permission for Compactor, and provider lifecycle rules must not expire current Thanos blocks.
 
+Phase 3.26 adds a production Kubernetes topology for that Thanos data path. Receive runs as a fixed three-member RF=3 StatefulSet with strict node and three-zone spreading; Store Gateway and Query each have two replicas, and Compactor remains a singleton. Separate ServiceAccounts preserve least privilege, retained PVCs protect local state, PodDisruptionBudgets cover voluntary maintenance, and default-deny ingress exposes only labelled metrics writers/readers. The base contains no cloud credential or public Service and requires an environment overlay for workload identity, StorageClass, capacity, and provider integration. CI renders all 24 resources, validates the Kubernetes 1.34 schema, and enforces the HA/security contract.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -177,6 +179,8 @@ THERMOFORM_THANOS_OBJECT_STORE_CONFIG=.runtime/thanos/object-store.yml \
 ```
 
 The target platform must inject an IAM task/instance role or projected web identity through the AWS SDK credential chain. Never put access keys in this file or `.env`. Validate the bucket through the same workload identity and follow the production cutover checklist in `docs/runbooks/cae-observability.md` before restarting all Receive, Store Gateway, and Compactor processes with the new path.
+
+For a cross-zone Kubernetes deployment, use the reviewed Kustomize base and deployment contract in [`infra/kubernetes/observability`](infra/kubernetes/observability/README.md). It intentionally requires a provider-specific production overlay and a separately created runtime Secret.
 
 Retention defaults to no sample expiry. To select a finite period, validate one equal policy before startup:
 

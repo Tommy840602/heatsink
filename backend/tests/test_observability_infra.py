@@ -361,5 +361,9 @@ def test_ci_validates_every_observability_configuration():
     assert "python scripts/run_observability_state_drill.py" in workflow
     assert "python scripts/render_thanos_s3_config.py" in workflow
     assert "python scripts/validate_thanos_retention.py" in workflow
+    assert "registry.k8s.io/kubectl:v1.34.1" in workflow
+    assert "kustomize /workspace/infra/kubernetes/observability" in workflow
+    assert "ghcr.io/yannh/kubeconform:v0.7.0" in workflow
+    assert "python scripts/validate_kubernetes_observability.py" in workflow
     assert "THERMOFORM_THANOS_OBJECT_STORE_CONFIG" in workflow
     assert "access_key:|secret_key:|session_token:" in workflow
