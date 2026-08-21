@@ -95,6 +95,13 @@ class OpenFoamCampaignRequest(BaseModel):
     resume_attempt_id: str | None = Field(
         default=None, pattern=r"^resume_[0-9a-f]{12}$"
     )
+    retry_of_attempt_id: str | None = Field(
+        default=None, pattern=r"^resume_[0-9a-f]{12}$"
+    )
+    root_resume_attempt_id: str | None = Field(
+        default=None, pattern=r"^resume_[0-9a-f]{12}$"
+    )
+    retry_index: int = Field(default=0, ge=0, le=100)
     criteria: CaeAcceptanceCriteria = Field(default_factory=CaeAcceptanceCriteria)
 
     @model_validator(mode="after")
@@ -113,6 +120,16 @@ class OpenFoamCampaignRequest(BaseModel):
             )
         if not self.resume_from_run_id and any(lineage):
             raise ValueError("resume lineage requires resume_from_run_id")
+        if self.retry_of_attempt_id and self.retry_index < 1:
+            raise ValueError("retry lineage requires a positive retry_index")
+        if not self.retry_of_attempt_id and self.retry_index:
+            raise ValueError("retry_index requires retry_of_attempt_id")
+        if self.retry_of_attempt_id and not self.root_resume_attempt_id:
+            raise ValueError("retry lineage requires root_resume_attempt_id")
+        if self.root_resume_attempt_id and not self.retry_of_attempt_id:
+            raise ValueError("root_resume_attempt_id requires retry lineage")
+        if self.retry_of_attempt_id and not self.resume_from_run_id:
+            raise ValueError("retry lineage requires resume_from_run_id")
         return self
 
 

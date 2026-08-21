@@ -12,6 +12,7 @@ from app.services.cae_history import (
     load_campaign_report,
     load_mesh_study_report,
 )
+from app.services.cae_resume import record_resume_event
 
 
 def _save_campaign(
@@ -98,6 +99,18 @@ def _save_resume_dispatch(
                 "checkpoint_run_id": "solve_000000000001",
                 "checkpoint_time_s": 0.003,
                 "requested_target_end_time_s": 0.01,
+                "request": {
+                    "design": {
+                        "fin_count": 20,
+                        "fin_thickness": 0.5,
+                        "fin_height": 30,
+                        "fin_spacing": 1.5,
+                        "air_velocity": 2.0,
+                    },
+                    "mesh_profile": "medium",
+                    "target_end_time_s": 0.01,
+                    "segment_duration_s": 0.001,
+                },
                 "job_id": f"job_{attempt_id}",
                 "queue": "thermoform-cae",
                 "status_at_dispatch": "queued",
@@ -164,3 +177,27 @@ def test_cae_history_api_supports_reconnect_and_rejects_unknown_ids(
     assert study.json()["design_result_available"] is True
     assert client.get("/api/v1/cae/campaigns/not-a-campaign").status_code == 404
     assert client.get("/api/v1/cae/mesh-studies/not-a-study").status_code == 404
+
+
+def test_resume_history_exposes_events_and_failed_retry_control(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    attempt_id = _save_resume_dispatch(
+        repository, "000000000008", "campaign_000000000099"
+    )
+    record_resume_event(repository, attempt_id, "queued", job_id="job_1")
+    record_resume_event(
+        repository,
+        attempt_id,
+        "failed",
+        stage="campaign_execution",
+        error_type="RuntimeError",
+    )
+
+    attempt = list_resume_dispatches(repository)[0]
+
+    assert attempt["status"] == "failed"
+    assert attempt["retry_allowed"] is True
+    assert [event["status"] for event in attempt["events"]] == [
+        "queued",
+        "failed",
+    ]

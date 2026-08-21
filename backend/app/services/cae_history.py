@@ -9,6 +9,13 @@ from app.repositories.artifacts import ArtifactRepository
 CAMPAIGN_PATTERN = re.compile(r"^campaign_[0-9a-f]{12}$")
 MESH_STUDY_PATTERN = re.compile(r"^meshstudy_[0-9a-f]{12}$")
 RESUME_ATTEMPT_PATTERN = re.compile(r"^resume_[0-9a-f]{12}$")
+RESUME_EVENT_ORDER = {
+    "queued": 0,
+    "started": 1,
+    "failed": 2,
+    "completed": 2,
+    "cancelled": 2,
+}
 
 
 def _read_report(path: Path) -> dict[str, Any] | None:
@@ -74,18 +81,66 @@ def _mesh_study_summary(report: dict[str, Any]) -> dict[str, Any]:
 def _resume_dispatch_summary(
     report: dict[str, Any], repository: ArtifactRepository
 ) -> dict[str, Any]:
+    attempt_id = str(report.get("resume_attempt_id") or "")
+    events = list_resume_events(repository, attempt_id)
     successor_id = str(report.get("successor_campaign_id") or "")
     try:
         successor = load_campaign_report(repository, successor_id)
     except FileNotFoundError:
         successor = None
+    latest_event_status = events[-1].get("status") if events else None
+    status = (
+        successor.get("status")
+        if successor
+        else latest_event_status or report.get("status_at_dispatch")
+    )
     return {
         **report,
-        "status": successor.get("status") if successor else report.get("status_at_dispatch"),
+        "status": status,
         "stop_reason": successor.get("stop_reason") if successor else None,
         "results_available": bool(successor and successor.get("results_available")),
         "successor_available": successor is not None,
+        "events": events,
+        "retry_allowed": latest_event_status == "failed"
+        and isinstance(report.get("request"), dict),
     }
+
+
+def load_resume_dispatch(
+    repository: ArtifactRepository, resume_attempt_id: str
+) -> dict[str, Any]:
+    if not RESUME_ATTEMPT_PATTERN.fullmatch(resume_attempt_id):
+        raise FileNotFoundError(resume_attempt_id)
+    path = repository.cae_artifact_path(
+        resume_attempt_id, "resume-dispatch.json"
+    )
+    report = _read_report(path)
+    if report is None or report.get("resume_attempt_id") != resume_attempt_id:
+        raise FileNotFoundError(resume_attempt_id)
+    return report
+
+
+def list_resume_events(
+    repository: ArtifactRepository, resume_attempt_id: str
+) -> list[dict[str, Any]]:
+    if not RESUME_ATTEMPT_PATTERN.fullmatch(resume_attempt_id):
+        return []
+    events = [
+        event
+        for path in repository.list_cae_artifact_paths(
+            resume_attempt_id, "resume-event-"
+        )
+        if (event := _read_report(path)) is not None
+        and event.get("resume_attempt_id") == resume_attempt_id
+        and event.get("status") in RESUME_EVENT_ORDER
+    ]
+    return sorted(
+        events,
+        key=lambda event: (
+            RESUME_EVENT_ORDER[str(event["status"])],
+            str(event.get("generated_at") or ""),
+        ),
+    )
 
 
 def list_campaign_reports(

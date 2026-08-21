@@ -119,3 +119,21 @@ class ArtifactRepository:
             and artifact_directory.name.startswith(prefix)
             and (report := artifact_directory / filename).is_file()
         ]
+
+    def list_cae_artifact_paths(
+        self, case_id: str, filename_prefix: str, filename_suffix: str = ".json"
+    ) -> list[Path]:
+        if Path(case_id).name != case_id:
+            raise ValueError("CAE artifact ID must not contain a path")
+        if Path(filename_prefix).name != filename_prefix:
+            raise ValueError("CAE artifact prefix must not contain a path")
+        directory = self.root / "cae" / case_id
+        if not directory.is_dir():
+            return []
+        return [
+            path
+            for path in directory.iterdir()
+            if path.is_file()
+            and path.name.startswith(filename_prefix)
+            and path.name.endswith(filename_suffix)
+        ]

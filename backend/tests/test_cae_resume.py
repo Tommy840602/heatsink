@@ -11,9 +11,13 @@ from app.repositories.artifacts import ArtifactRepository
 from app.services.cae_resume import (
     enqueue_campaign_resume,
     preview_campaign_resume,
+    record_resume_event,
+    retry_campaign_resume,
     validate_issued_resume_request,
 )
+from app.services.cae_history import list_resume_events
 from app.services.jobs import CAE_QUEUE_NAME, get_job_queue
+from app.services import job_tasks, openfoam_campaign
 from app.services.openfoam_campaign import expected_campaign_case_id
 from app.services.openfoam_solve import CHECKPOINT_METADATA
 
@@ -198,6 +202,8 @@ def test_atomic_resume_injects_lineage_and_enqueues_server_payload(tmp_path):
         ).read_text(encoding="utf-8")
     )
     assert dispatch["successor_campaign_id"] == result["lineage"]["successor_campaign_id"]
+    events = list_resume_events(repository, result["resume_attempt_id"])
+    assert [event["status"] for event in events] == ["queued"]
 
 
 def test_atomic_resume_deduplicates_same_attempt_and_reuses_completed_report(
@@ -280,6 +286,111 @@ def test_worker_revalidates_issued_lineage_against_checkpoint(tmp_path):
         raise AssertionError("forged resume lineage was accepted")
 
 
+def test_failed_resume_retry_creates_new_idempotent_attempt(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+    original = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+    record_resume_event(
+        repository,
+        original["resume_attempt_id"],
+        "started",
+        job_id=original["job"]["job_id"],
+    )
+    record_resume_event(
+        repository,
+        original["resume_attempt_id"],
+        "failed",
+        stage="campaign_execution",
+        error_type="RuntimeError",
+    )
+
+    retry = retry_campaign_resume(
+        original["resume_attempt_id"], repository, queue
+    )
+    duplicate = retry_campaign_resume(
+        original["resume_attempt_id"], repository, queue
+    )
+
+    assert retry["resume_ready"] is True
+    assert retry["resume_attempt_id"] != original["resume_attempt_id"]
+    assert retry["lineage"]["retry_of_attempt_id"] == original["resume_attempt_id"]
+    assert retry["lineage"]["root_resume_attempt_id"] == original["resume_attempt_id"]
+    assert retry["lineage"]["retry_index"] == 1
+    assert retry["job"]["lineage"] == retry["lineage"]
+    assert duplicate["resume_attempt_id"] == retry["resume_attempt_id"]
+    assert duplicate["deduplicated"] is True
+    assert len(queue.calls) == 2
+    retry_events = list_resume_events(repository, retry["resume_attempt_id"])
+    assert [event["status"] for event in retry_events] == ["queued"]
+
+
+def test_retry_rejects_nonfailed_attempt_without_queueing(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+    original = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+
+    result = retry_campaign_resume(
+        original["resume_attempt_id"], repository, queue
+    )
+
+    assert result["resume_ready"] is False
+    assert result["reason"] == "retry_not_allowed"
+    assert len(queue.calls) == 1
+
+
+def test_resume_events_are_append_only_and_lifecycle_sorted(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    attempt_id = "resume_000000000099"
+
+    record_resume_event(repository, attempt_id, "failed", stage="execution")
+    record_resume_event(repository, attempt_id, "queued", job_id="job_1")
+    record_resume_event(repository, attempt_id, "started", job_id="job_1")
+    record_resume_event(repository, attempt_id, "queued", job_id="job_changed")
+
+    events = list_resume_events(repository, attempt_id)
+    assert [event["status"] for event in events] == [
+        "queued",
+        "started",
+        "failed",
+    ]
+    assert events[0]["job_id"] == "job_1"
+
+
+def test_resume_worker_records_started_and_completed_events(tmp_path, monkeypatch):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+    queued = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+    payload = queue.calls[0][1]
+    successor_id = queued["lineage"]["successor_campaign_id"]
+    monkeypatch.setattr(job_tasks, "ArtifactRepository", lambda: repository)
+    monkeypatch.setattr(
+        openfoam_campaign,
+        "run_openfoam_campaign",
+        lambda *_args, **_kwargs: {
+            "campaign_id": successor_id,
+            "status": "completed_unconverged",
+            "stop_reason": "target_time_reached",
+            "results_available": False,
+        },
+    )
+
+    result = job_tasks.execute_job("cae_campaign", payload)
+
+    assert result["campaign_id"] == successor_id
+    events = list_resume_events(repository, queued["resume_attempt_id"])
+    assert [event["status"] for event in events] == [
+        "queued",
+        "started",
+        "completed",
+    ]
+
+
 def test_resume_preview_api_returns_preflight_and_404(tmp_path, monkeypatch):
     repository = ArtifactRepository(tmp_path)
     request = _request()
@@ -328,5 +439,30 @@ def test_atomic_resume_api_returns_202_and_job_lineage(tmp_path, monkeypatch):
     assert body["reason"] == "queued"
     assert body["job"]["queue"] == CAE_QUEUE_NAME
     assert body["job"]["lineage"] == body["lineage"]
+    assert duplicate.status_code == 200
+    assert duplicate.json()["deduplicated"] is True
+
+
+def test_failed_resume_retry_api_returns_202_then_deduplicates(
+    tmp_path, monkeypatch
+):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+    original = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+    record_resume_event(repository, original["resume_attempt_id"], "failed")
+    monkeypatch.setattr(cae_api, "repository", repository)
+    app.dependency_overrides[get_job_queue] = lambda: queue
+    try:
+        client = TestClient(app)
+        url = f"/api/v1/cae/resume-attempts/{original['resume_attempt_id']}/retry"
+        response = client.post(url)
+        duplicate = client.post(url)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert response.json()["lineage"]["retry_index"] == 1
     assert duplicate.status_code == 200
     assert duplicate.json()["deduplicated"] is True

@@ -30,6 +30,8 @@ Phase 3.11 closes the client-side preflight-to-queue race. A single FastAPI resu
 
 Phase 3.12 makes that resume operation idempotent across repeated clicks, browser sessions, and concurrent callers. A Redis lock plus deterministic RQ job ID reuses an active attempt, a durable immutable dispatch record survives job expiry, and an existing successor campaign report prevents accidental OpenFOAM reruns. React exposes the complete parent → checkpoint → successor lineage.
 
+Phase 3.13 adds an append-only resume-attempt lifecycle (`queued`, `started`, `failed`, `completed`, or `cancelled`) and a controlled retry contract. Only a terminal failed attempt may be retried; its immutable parent, checkpoint, and solver settings are reused while a new attempt, job, and successor campaign identity are issued. Repeated retry requests deduplicate to that same retry attempt, and React renders the event trail with the retry action only when the backend permits it.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -125,6 +127,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/cae/campaigns/{campaign_id}/resume-preview` | Diagnose checkpoint compatibility without exposing a trusted successor payload |
 | `POST` | `/api/v1/cae/campaigns/{campaign_id}/resume` | Atomically validate and enqueue a checkpoint successor with lineage metadata |
 | `GET` | `/api/v1/cae/resume-attempts` | List durable resume dispatches with parent, checkpoint, successor, and completion state |
+| `POST` | `/api/v1/cae/resume-attempts/{resume_attempt_id}/retry` | Retry one terminal failed attempt with preserved checkpoint settings and new lineage |
 | `GET` | `/api/v1/cae/mesh-studies` | List newest-first mesh-independence study summaries |
 | `GET` | `/api/v1/cae/mesh-studies/{mesh_study_id}` | Load one full mesh-independence report |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
@@ -157,6 +160,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - Resume lineage is available immediately in RQ job metadata and is carried into the immutable successor campaign report, linking the parent campaign, checkpoint solve run, and deterministic resume attempt.
 - Identical resume attempts share one deterministic RQ job ID under a Redis lock. Repeated requests return the existing job with `deduplicated=true`; if the job has expired but its successor report exists, the API returns that completed immutable result instead of queueing another solver run.
 - Every accepted resume writes one immutable `resume-dispatch.json`. The resume-attempt history API augments those records from successor campaign reports, and CAE Operations renders the full lineage across browser sessions.
+- Resume workers append one immutable artifact for every reached lifecycle state. The history endpoint exposes those events in lifecycle order and advertises `retry_allowed` only after a terminal failure.
+- Retrying a failed attempt reconstructs the server-stored request, revalidates the original checkpoint, and issues `retry_of_attempt_id`, root-attempt, and retry-index lineage. The retry endpoint cannot restart queued, active, completed, or cancelled attempts.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

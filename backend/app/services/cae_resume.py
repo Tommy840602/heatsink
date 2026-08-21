@@ -19,6 +19,14 @@ from app.services.jobs import JobQueue
 
 
 SOLVE_RUN_PATTERN = re.compile(r"^solve_[0-9a-f]{12}$")
+RESUME_ATTEMPT_PATTERN = re.compile(r"^resume_[0-9a-f]{12}$")
+RESUME_EVENT_STATUSES = (
+    "queued",
+    "started",
+    "failed",
+    "completed",
+    "cancelled",
+)
 
 
 def _blocked(
@@ -174,38 +182,75 @@ def _resume_attempt_id(
     request: OpenFoamCampaignRequest,
     preview: dict[str, Any],
     repository: ArtifactRepository,
+    *,
+    retry_of_attempt_id: str | None = None,
+    root_resume_attempt_id: str | None = None,
+    retry_index: int = 0,
 ) -> str:
-    return repository.version(
-        {
-            "parent_campaign_id": campaign_id,
-            "case_id": preview["case_id"],
-            "resume_from_run_id": preview["resume_from_run_id"],
-            "request": request.model_dump(mode="json"),
-        },
-        "resume",
+    request_payload = request.model_dump(mode="json")
+    request_payload.pop("retry_of_attempt_id", None)
+    request_payload.pop("root_resume_attempt_id", None)
+    request_payload.pop("retry_index", None)
+    identity = {
+        "parent_campaign_id": campaign_id,
+        "case_id": preview["case_id"],
+        "resume_from_run_id": preview["resume_from_run_id"],
+        "request": request_payload,
+    }
+    if retry_of_attempt_id:
+        identity.update(
+            {
+                "retry_of_attempt_id": retry_of_attempt_id,
+                "root_resume_attempt_id": root_resume_attempt_id,
+                "retry_index": retry_index,
+            }
+        )
+    return repository.version(identity, "resume")
+
+
+def record_resume_event(
+    repository: ArtifactRepository,
+    resume_attempt_id: str,
+    status: str,
+    **details: Any,
+) -> dict[str, Any]:
+    if not RESUME_ATTEMPT_PATTERN.fullmatch(resume_attempt_id):
+        raise ValueError("Invalid resume attempt ID")
+    if status not in RESUME_EVENT_STATUSES:
+        raise ValueError("Invalid resume event status")
+    event = {
+        "resume_attempt_id": resume_attempt_id,
+        "status": status,
+        "generated_at": datetime.now(UTC).isoformat(),
+        **details,
+    }
+    repository.save_cae_artifact(
+        resume_attempt_id,
+        f"resume-event-{status}.json",
+        json.dumps(event, indent=2, sort_keys=True),
     )
+    return event
 
 
-def enqueue_campaign_resume(
+def _enqueue_validated_resume(
     campaign_id: str,
     request: OpenFoamCampaignRequest,
+    preview: dict[str, Any],
     repository: ArtifactRepository,
     queue: JobQueue,
+    *,
+    retry_of_attempt_id: str | None = None,
+    retry_index: int = 0,
+    root_resume_attempt_id: str | None = None,
 ) -> dict[str, Any]:
-    if any(
-        (
-            request.resume_from_run_id,
-            request.parent_campaign_id,
-            request.resume_attempt_id,
-        )
-    ):
-        raise ValueError("Resume identity is issued only by the atomic resume endpoint")
-    preview = preview_campaign_resume(campaign_id, request, repository)
-    if not preview["resume_ready"]:
-        return preview
-
     resume_attempt_id = _resume_attempt_id(
-        campaign_id, request, preview, repository
+        campaign_id,
+        request,
+        preview,
+        repository,
+        retry_of_attempt_id=retry_of_attempt_id,
+        root_resume_attempt_id=root_resume_attempt_id,
+        retry_index=retry_index,
     )
     lineage = {
         "resume_attempt_id": resume_attempt_id,
@@ -214,12 +259,29 @@ def enqueue_campaign_resume(
         "checkpoint_run_id": preview["resume_from_run_id"],
         "checkpoint_time_s": preview["current_time_s"],
         "requested_target_end_time_s": preview["requested_target_end_time_s"],
+        "retry_of_attempt_id": retry_of_attempt_id,
+        "root_resume_attempt_id": root_resume_attempt_id or resume_attempt_id,
+        "retry_index": retry_index,
     }
+    base_payload = request.model_dump(mode="json")
+    base_payload.update(
+        {
+            "resume_from_run_id": None,
+            "parent_campaign_id": None,
+            "resume_attempt_id": None,
+            "retry_of_attempt_id": None,
+            "root_resume_attempt_id": None,
+            "retry_index": 0,
+        }
+    )
     payload = {
-        **request.model_dump(mode="json"),
+        **base_payload,
         "resume_from_run_id": preview["resume_from_run_id"],
         "parent_campaign_id": campaign_id,
         "resume_attempt_id": resume_attempt_id,
+        "retry_of_attempt_id": retry_of_attempt_id,
+        "root_resume_attempt_id": root_resume_attempt_id,
+        "retry_index": retry_index,
     }
     issued_request = OpenFoamCampaignRequest.model_validate(payload)
     successor_campaign_id = campaign_id_for_request(issued_request, repository)
@@ -251,6 +313,7 @@ def enqueue_campaign_resume(
     deduplicated = bool(job.get("deduplicated"))
     dispatch = {
         **lineage,
+        "request": base_payload,
         "job_id": job["job_id"],
         "queue": job.get("queue", "thermoform-cae"),
         "status_at_dispatch": job["status"],
@@ -260,6 +323,14 @@ def enqueue_campaign_resume(
         resume_attempt_id,
         "resume-dispatch.json",
         json.dumps(dispatch, indent=2, sort_keys=True),
+    )
+    record_resume_event(
+        repository,
+        resume_attempt_id,
+        "queued",
+        job_id=job["job_id"],
+        successor_campaign_id=successor_campaign_id,
+        deduplicated=deduplicated,
     )
     return {
         **preview,
@@ -278,6 +349,79 @@ def enqueue_campaign_resume(
     }
 
 
+def enqueue_campaign_resume(
+    campaign_id: str,
+    request: OpenFoamCampaignRequest,
+    repository: ArtifactRepository,
+    queue: JobQueue,
+) -> dict[str, Any]:
+    if any(
+        (
+            request.resume_from_run_id,
+            request.parent_campaign_id,
+            request.resume_attempt_id,
+            request.retry_of_attempt_id,
+            request.root_resume_attempt_id,
+            request.retry_index,
+        )
+    ):
+        raise ValueError("Resume identity is issued only by the atomic resume endpoint")
+    preview = preview_campaign_resume(campaign_id, request, repository)
+    if not preview["resume_ready"]:
+        return preview
+
+    return _enqueue_validated_resume(
+        campaign_id, request, preview, repository, queue
+    )
+
+
+def retry_campaign_resume(
+    resume_attempt_id: str,
+    repository: ArtifactRepository,
+    queue: JobQueue,
+) -> dict[str, Any]:
+    from app.services.cae_history import load_resume_dispatch, list_resume_events
+
+    dispatch = load_resume_dispatch(repository, resume_attempt_id)
+    events = list_resume_events(repository, resume_attempt_id)
+    latest_status = (
+        events[-1]["status"] if events else dispatch.get("status_at_dispatch")
+    )
+    if latest_status != "failed":
+        return {
+            "resume_ready": False,
+            "reason": "retry_not_allowed",
+            "detail": "Only a terminal failed resume attempt can be retried.",
+            "resume_attempt_id": resume_attempt_id,
+        }
+    if not isinstance(dispatch.get("request"), dict):
+        return {
+            "resume_ready": False,
+            "reason": "retry_request_unavailable",
+            "detail": "This legacy attempt does not contain the immutable request required for retry.",
+            "resume_attempt_id": resume_attempt_id,
+        }
+    request = OpenFoamCampaignRequest.model_validate(dispatch["request"])
+    campaign_id = str(dispatch["parent_campaign_id"])
+    preview = preview_campaign_resume(campaign_id, request, repository)
+    if not preview["resume_ready"]:
+        return preview
+    retry_index = int(dispatch.get("retry_index") or 0) + 1
+    root_attempt_id = str(
+        dispatch.get("root_resume_attempt_id") or resume_attempt_id
+    )
+    return _enqueue_validated_resume(
+        campaign_id,
+        request,
+        preview,
+        repository,
+        queue,
+        retry_of_attempt_id=resume_attempt_id,
+        retry_index=retry_index,
+        root_resume_attempt_id=root_attempt_id,
+    )
+
+
 def validate_issued_resume_request(
     request: OpenFoamCampaignRequest,
     repository: ArtifactRepository,
@@ -292,13 +436,22 @@ def validate_issued_resume_request(
             "resume_from_run_id": None,
             "parent_campaign_id": None,
             "resume_attempt_id": None,
+            "retry_of_attempt_id": None,
+            "root_resume_attempt_id": None,
+            "retry_index": 0,
         }
     )
     preview = preview_campaign_resume(
         request.parent_campaign_id, base_request, repository
     )
     expected_attempt_id = _resume_attempt_id(
-        request.parent_campaign_id, base_request, preview, repository
+        request.parent_campaign_id,
+        base_request,
+        preview,
+        repository,
+        retry_of_attempt_id=request.retry_of_attempt_id,
+        root_resume_attempt_id=request.root_resume_attempt_id,
+        retry_index=request.retry_index,
     )
     if (
         not preview["resume_ready"]

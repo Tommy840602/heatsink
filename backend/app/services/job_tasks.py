@@ -83,23 +83,82 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
         return result
     if task == "cae_campaign":
         from app.domain.cae import OpenFoamCampaignRequest
-        from app.services.cae_resume import validate_issued_resume_request
+        from app.services.cae_resume import (
+            RESUME_ATTEMPT_PATTERN,
+            record_resume_event,
+            validate_issued_resume_request,
+        )
         from app.services.openfoam_campaign import run_openfoam_campaign
 
-        request = OpenFoamCampaignRequest.model_validate(payload)
-        validate_issued_resume_request(request, repository)
+        raw_attempt_id = payload.get("resume_attempt_id")
+        resume_attempt_id = (
+            raw_attempt_id
+            if isinstance(raw_attempt_id, str)
+            and RESUME_ATTEMPT_PATTERN.fullmatch(raw_attempt_id)
+            else None
+        )
+        try:
+            request = OpenFoamCampaignRequest.model_validate(payload)
+            validate_issued_resume_request(request, repository)
+        except Exception as exc:
+            if resume_attempt_id:
+                record_resume_event(
+                    repository,
+                    resume_attempt_id,
+                    "failed",
+                    stage="lineage_validation",
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:500],
+                )
+            raise
+        if resume_attempt_id:
+            job = get_current_job()
+            record_resume_event(
+                repository,
+                resume_attempt_id,
+                "started",
+                job_id=job.id if job else None,
+                parent_campaign_id=request.parent_campaign_id,
+                retry_of_attempt_id=request.retry_of_attempt_id,
+                root_resume_attempt_id=request.root_resume_attempt_id,
+                retry_index=request.retry_index,
+            )
 
         def campaign_progress(current: int, total: int, stage: str) -> None:
             value = min(95, 10 + round(85 * current / max(total, 1)))
             _progress(value, f"{stage}_{current}_of_{total}")
 
         _progress(10, "preparing_checkpoint_campaign")
-        result = run_openfoam_campaign(
-            request,
-            repository,
-            progress_callback=campaign_progress,
-            should_cancel=_cancel_requested,
-        )
+        try:
+            result = run_openfoam_campaign(
+                request,
+                repository,
+                progress_callback=campaign_progress,
+                should_cancel=_cancel_requested,
+            )
+        except Exception as exc:
+            if resume_attempt_id:
+                record_resume_event(
+                    repository,
+                    resume_attempt_id,
+                    "failed",
+                    stage="campaign_execution",
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:500],
+                )
+            raise
+        if resume_attempt_id:
+            terminal_status = (
+                "cancelled" if result["status"] == "cancelled" else "completed"
+            )
+            record_resume_event(
+                repository,
+                resume_attempt_id,
+                terminal_status,
+                successor_campaign_id=result.get("campaign_id"),
+                stop_reason=result.get("stop_reason"),
+                results_available=bool(result.get("results_available")),
+            )
         _progress(
             100 if result["status"] != "cancelled" else 99,
             "cancelled" if result["status"] == "cancelled" else "completed",

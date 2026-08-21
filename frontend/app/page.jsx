@@ -532,6 +532,34 @@ function ModuleView({
       setResumeChecking(false);
     }
   };
+  const retryCaeResumeAttempt = async (attempt) => {
+    if (!attempt?.retry_allowed || resumeChecking || campaignRunning) return;
+    setResumeChecking(true);
+    setResumePreview(null);
+    notify(`Retrying failed attempt · ${attempt.resume_attempt_id}`);
+    try {
+      const retry = await api.retryCaeResumeAttempt(attempt.resume_attempt_id);
+      setResumePreview(retry);
+      if (!retry.resume_ready) {
+        notify(`Retry blocked · ${retry.detail}`);
+        return;
+      }
+      const job = retry.job;
+      window.localStorage.setItem(activeCaeJobStorageKey, job.job_id);
+      setResumeChecking(false);
+      notify(
+        retry.deduplicated
+          ? `Existing retry reused · ${retry.resume_attempt_id}`
+          : `Retry queued · ${retry.resume_attempt_id}`,
+      );
+      await monitorCaeJob(job);
+      await loadCaeHistory();
+    } catch {
+      notify("Failed resume retry could not be queued");
+    } finally {
+      setResumeChecking(false);
+    }
+  };
   const cancelCaeCampaign = async () => {
     if (!campaignJob || terminalJobStatuses.has(campaignJob.status)) return;
     try {
@@ -1903,21 +1931,46 @@ function ModuleView({
                     <header>
                       <code>{attempt.resume_attempt_id}</code>
                       <b className={attempt.results_available ? "passed" : ""}>
-                        {attempt.successor_available
-                          ? readableState(attempt.status)
-                          : "Dispatched"}
+                        {readableState(attempt.status ?? "dispatched")}
                       </b>
                     </header>
-                    <div>
+                    {attempt.retry_of_attempt_id && (
+                      <small className="retry-origin">
+                        Retry {attempt.retry_index} of {attempt.retry_of_attempt_id}
+                      </small>
+                    )}
+                    <div className="resume-lineage-path">
                       <code>{attempt.parent_campaign_id}</code>
                       <i>→</i>
                       <code>{attempt.checkpoint_run_id}</code>
                       <i>→</i>
                       <code>{attempt.successor_campaign_id}</code>
                     </div>
+                    <div className="resume-event-trail" aria-label="Attempt lifecycle">
+                      {(attempt.events ?? []).map((event) => (
+                        <span
+                          className={`event-${event.status}`}
+                          key={`${attempt.resume_attempt_id}-${event.status}`}
+                          title={event.generated_at}
+                        >
+                          {readableState(event.status)}
+                        </span>
+                      ))}
+                    </div>
                     <footer>
-                      <span>{Number(attempt.checkpoint_time_s).toExponential(2)} s → {Number(attempt.requested_target_end_time_s).toExponential(2)} s</span>
-                      <small>{attempt.job_id}</small>
+                      <div>
+                        <span>{Number(attempt.checkpoint_time_s).toExponential(2)} s → {Number(attempt.requested_target_end_time_s).toExponential(2)} s</span>
+                        <small>{attempt.job_id}</small>
+                      </div>
+                      {attempt.retry_allowed && (
+                        <button
+                          className="retry-resume-action"
+                          disabled={resumeChecking || campaignRunning}
+                          onClick={() => retryCaeResumeAttempt(attempt)}
+                        >
+                          Retry failed attempt →
+                        </button>
+                      )}
                     </footer>
                   </article>
                 ))}

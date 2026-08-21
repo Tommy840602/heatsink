@@ -16,7 +16,11 @@ from app.services.cae_history import (
     load_campaign_report,
     load_mesh_study_report,
 )
-from app.services.cae_resume import enqueue_campaign_resume, preview_campaign_resume
+from app.services.cae_resume import (
+    enqueue_campaign_resume,
+    preview_campaign_resume,
+    retry_campaign_resume,
+)
 
 
 router = APIRouter(prefix="/api/v1")
@@ -97,6 +101,27 @@ def campaign_resume(
         result = enqueue_campaign_resume(campaign_id, request, repository, queue)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
+    if result["resume_ready"] and not result.get("deduplicated"):
+        response.status_code = status.HTTP_202_ACCEPTED
+    return result
+
+
+@router.post("/cae/resume-attempts/{resume_attempt_id}/retry")
+def retry_resume_attempt(
+    resume_attempt_id: str,
+    response: Response,
+    queue: JobQueue = Depends(get_job_queue),
+) -> dict[str, Any]:
+    try:
+        result = retry_campaign_resume(resume_attempt_id, repository, queue)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail="CAE resume attempt not found"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RedisError as exc:

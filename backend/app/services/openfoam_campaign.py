@@ -40,10 +40,17 @@ def _expected_case_id(
 def campaign_id_for_request(
     request: OpenFoamCampaignRequest, repository: ArtifactRepository
 ) -> str:
+    request_payload = request.model_dump(mode="json")
+    if request.retry_of_attempt_id is None:
+        request_payload.pop("retry_of_attempt_id", None)
+    if request.root_resume_attempt_id is None:
+        request_payload.pop("root_resume_attempt_id", None)
+    if request.retry_index == 0:
+        request_payload.pop("retry_index", None)
     return repository.version(
         {
             "case_id": expected_campaign_case_id(request, repository),
-            "request": request.model_dump(mode="json"),
+            "request": request_payload,
             "contract": CAMPAIGN_CONTRACT_VERSION,
         },
         "campaign",
@@ -249,6 +256,15 @@ def run_openfoam_campaign(
                 "checkpoint_run_id": request.resume_from_run_id,
                 "checkpoint_time_s": resume_checkpoint_time_s,
                 "requested_target_end_time_s": request.target_end_time_s,
+                **(
+                    {
+                        "retry_of_attempt_id": request.retry_of_attempt_id,
+                        "root_resume_attempt_id": request.root_resume_attempt_id,
+                        "retry_index": request.retry_index,
+                    }
+                    if request.retry_of_attempt_id
+                    else {}
+                ),
             }
             if request.resume_from_run_id
             else None

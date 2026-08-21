@@ -155,6 +155,10 @@ export const api = {
     request(`/cae/campaigns?limit=${limit}`),
   listCaeResumeAttempts: (limit = 50) =>
     request(`/cae/resume-attempts?limit=${limit}`),
+  retryCaeResumeAttempt: (attemptId) =>
+    request(`/cae/resume-attempts/${attemptId}/retry`, {
+      method: "POST",
+    }),
   getCaeCampaign: (campaignId) =>
     request(`/cae/campaigns/${campaignId}`),
   listMeshStudies: (limit = 20) =>
