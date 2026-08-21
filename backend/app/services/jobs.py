@@ -16,7 +16,7 @@ CAE_QUEUE_NAME = "thermoform-cae"
 def queue_name_for_task(task: str) -> str:
     return (
         CAE_QUEUE_NAME
-        if task in {"cae", "cae_mesh", "cae_smoke", "cae_benchmark"}
+        if task in {"cae", "cae_mesh", "cae_smoke", "cae_solve", "cae_benchmark"}
         else DEFAULT_QUEUE_NAME
     )
 
@@ -37,7 +37,7 @@ class RqJobQueue:
         )
         self.queues = {
             DEFAULT_QUEUE_NAME: Queue(DEFAULT_QUEUE_NAME, connection=self.connection, default_timeout=7200),
-            CAE_QUEUE_NAME: Queue(CAE_QUEUE_NAME, connection=self.connection, default_timeout=7200),
+            CAE_QUEUE_NAME: Queue(CAE_QUEUE_NAME, connection=self.connection, default_timeout=21600),
         }
 
     def enqueue(self, task: str, payload: dict[str, Any]) -> dict[str, Any]:

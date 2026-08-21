@@ -15,7 +15,7 @@ from app.services.cad import generate_cad
 from app.services.openfoam_thermal_case import thermal_case_files
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v8"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v9"
 
 
 def mesh_required_commands() -> list[str]:
@@ -85,6 +85,7 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
             "heat_source": "absolute sensible-enthalpy source in the entire solid region",
             "response_extraction": "solid Tmax, inlet/outlet area-average pressure, integrated solid interface heat flux",
             "smoke_solve_only": True,
+            "production_solve_supported": True,
         },
         "case_validated": False,
         "results_available": False,
@@ -136,10 +137,20 @@ cd "$(dirname "$0")"
     control_dict = f"""FoamFile
 {{ version 2.0; format ascii; class dictionary; object controlDict; }}
 application {request.solver};
-startFrom startTime; startTime 0; stopAt endTime; endTime 0.00001;
-deltaT 0.00001; writeControl timeStep; writeInterval 1;
-purgeWrite 1; writeFormat ascii; writePrecision 7;
-runTimeModifiable false; adjustTimeStep false; maxCo 0.3; maxDi 10;
+startFrom startTime;
+startTime 0;
+stopAt endTime;
+endTime 0.00001;
+deltaT 0.00001;
+writeControl timeStep;
+writeInterval 1;
+purgeWrite 1;
+writeFormat ascii;
+writePrecision 7;
+runTimeModifiable false;
+adjustTimeStep false;
+maxCo 0.3;
+maxDi 10;
 functions
 {{
   solidTemperature
@@ -232,6 +243,9 @@ mergeTolerance 1e-6;
         "system/surfaceFeatureExtractDict": surface_features,
         "system/snappyHexMeshDict": snappy,
         "system/meshQualityDict": "maxNonOrtho 65; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 60; minVol 1e-13; minTetQuality 1e-15; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.05; minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 8; errorReduction 0.5;\n",
+        "system/decomposeParDict": "FoamFile { version 2.0; format ascii; class dictionary; object decomposeParDict; }\nnumberOfSubdomains 2;\nmethod scotch;\n",
+        "system/fluid/decomposeParDict": "FoamFile { version 2.0; format ascii; class dictionary; object decomposeParDict; }\nnumberOfSubdomains 2;\nmethod scotch;\n",
+        "system/solid/decomposeParDict": "FoamFile { version 2.0; format ascii; class dictionary; object decomposeParDict; }\nnumberOfSubdomains 2;\nmethod scotch;\n",
         "constant/regionProperties": "FoamFile { version 2.0; format ascii; class dictionary; object regionProperties; }\nregions ( fluid (fluid) solid (solid) );\n",
         "constant/triSurface/heatsink-mm.stl": stl,
     }

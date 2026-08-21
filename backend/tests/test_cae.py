@@ -41,6 +41,9 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
             "0.orig/U",
             "system/blockMeshDict",
             "system/snappyHexMeshDict",
+            "system/decomposeParDict",
+            "system/fluid/decomposeParDict",
+            "system/solid/decomposeParDict",
             "system/fluid/changeDictionaryDict",
             "system/solid/changeDictionaryDict",
             "constant/regionProperties",
@@ -56,6 +59,7 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert manifest["mesh_strategy"]["target_cells_through_fin_thickness"] == 2
         assert manifest["mesh_strategy"]["per_region_quality_required"] is True
         assert manifest["field_contract"]["smoke_solve_only"] is True
+        assert manifest["field_contract"]["production_solve_supported"] is True
         assert "solid Tmax" in manifest["field_contract"]["response_extraction"]
         allrun = archive.read("Allrun").decode()
         assert "surfaceCheck constant/triSurface/heatsink.stl" in allrun
@@ -69,6 +73,7 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert "inletPressure" in control
         assert "outletPressure" in control
         assert "solidHeatRate" in control
+        assert "numberOfSubdomains 2" in archive.read("system/decomposeParDict").decode()
         block_mesh = archive.read("system/blockMeshDict").decode()
         assert "(-0.030000 -0.010000 -0.005000)" in block_mesh
         assert "0.130000" in block_mesh

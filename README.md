@@ -16,6 +16,8 @@ Phase 3.4 packages compressible laminar air, isotropic aluminum, inlet/outlet fi
 
 Phase 3.5 adds solver-native response probes for solid Tmax, inlet/outlet area-average pressure, and integrated solid-interface heat flux. Readiness requires at least five samples, stable Tmax and pressure drop, converged residuals, energy imbalance within 5%, and a non-smoke execution mode; smoke reports expose the parsed values only as provisional diagnostics.
 
+Phase 3.6 adds the resumable `cae_solve` production contract. Each run can restore only a checkpoint with the same design and boundary-condition fingerprint, advances from `latestTime`, and emits a new immutable checkpoint. Multi-region MPI runs generate matching interface face sets, constrain both sides to the same processor, reconstruct the latest written time, and still publish no CFD response until every readiness gate passes.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -102,7 +104,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
 | `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
 | `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
-| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, `cae`, `cae_mesh`, `cae_smoke`, or `cae_benchmark` work and return `202` |
+| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, or `cae_benchmark` work and return `202` |
 | `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
@@ -126,13 +128,16 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 ## Async jobs and OpenFOAM handoff
 
 - The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
-- Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
+- Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
-- The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, and a fail-fast preprocessing `Allrun`; it stops before `chtMultiRegionFoam` until fields and material gates are implemented.
+- The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.
 - Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
 - `cae_mesh` executes the package on the OpenFOAM worker and persists immutable `mesh.log` and `mesh-report.json` artifacts. Passing means the configured preprocessing gates passed; `results_available` remains false because no thermal solution exists yet.
 - `cae_smoke` first enforces the same mesh gates, then requires both thermo regions, the configured `heatSource`, coupled energy, momentum/pressure fields, clean solver termination, and persisted `smoke.log`/`smoke-report.json` artifacts. A pass validates startup compatibility only; extracted diagnostics remain provisional and are never published as CFD responses.
 - Response probes run as OpenFOAM function objects at write time. The one-step integration test produced 25°C, 0 Pa pressure drop, and 0.0001455 W heat-out with 99.99985% energy imbalance; these intentionally remain provisional and unavailable as engineering results.
+- `cae_solve` restores the latest regional fields from an immutable ZIP, validates the checkpoint case fingerprint, and writes a successor checkpoint after completion, timeout, or recoverable solver failure. Temporary expanded cases are retained only if a worker is interrupted before it can write a report.
+- For parallel CHT, `topoSet` creates matching interface face sets in both regions and `singleProcessorFaceSets` keeps the implicit coupled faces on processor 0 before `decomposePar -allRegions`. The worker runs `chtMultiRegionFoam -parallel` through MPI and reconstructs the exact latest processor time.
+- The real two-process validation resumed a 1,975,393-cell design from `1e-5 s` to `2e-5 s`, reconstructed both regions, and generated a valid successor checkpoint. Residuals passed (`3.18e-6` maximum final residual), but only 2 of 5 samples were available and energy imbalance remained 99.99985%, so the run correctly returned `completed_unconverged` with `results_available=false`.
 - Heat-sink solver execution is blocked while union geometry, interfaces, fields, material properties, mesh quality, convergence, or energy balance remain unvalidated.
 - The benchmark worker targets the official OpenCFD OpenFOAM v2312 `multiRegionHeater` tutorial. Start the worker from a sourced OpenFOAM shell and expose either `FOAM_TUTORIALS` or `THERMOFORM_OPENFOAM_BENCHMARK_CASE`.
 - A tutorial benchmark passes only after successful execution, `Mesh OK`, mesh limits, an `End` marker, and converged final residuals. It still returns `results_available=false` because it is not the optimized heat-sink geometry.

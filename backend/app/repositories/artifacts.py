@@ -83,6 +83,20 @@ class ArtifactRepository:
                 path.write_text(content, encoding="utf-8")
         return path
 
+    def cae_artifact_write_path(self, case_id: str, filename: str) -> Path:
+        if Path(filename).name != filename:
+            raise ValueError("CAE artifact filename must not contain a path")
+        directory = self.root / "cae" / case_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / filename
+
+    def cae_work_path(self, run_id: str) -> Path:
+        if Path(run_id).name != run_id:
+            raise ValueError("CAE run ID must not contain a path")
+        path = self.root / "cae-work" / run_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def cae_artifact_path(self, case_id: str, filename: str) -> Path:
         if Path(filename).name != filename:
             raise FileNotFoundError(filename)
