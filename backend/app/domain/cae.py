@@ -22,6 +22,9 @@ class CaeAcceptanceCriteria(BaseModel):
     max_concave_cell_percent: float = Field(default=5.0, ge=0.0, le=25.0)
     max_low_determinant_cell_percent: float = Field(default=0.0, ge=0.0, le=10.0)
     min_residual_samples: int = Field(default=3, ge=1, le=1000)
+    min_response_samples: int = Field(default=5, ge=2, le=1000)
+    max_t_max_change_c: float = Field(default=0.1, gt=0.0, le=10.0)
+    max_pressure_drop_change_pa: float = Field(default=0.1, gt=0.0, le=100.0)
 
 
 class OpenFoamBenchmarkRequest(BaseModel):

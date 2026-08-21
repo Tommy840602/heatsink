@@ -246,3 +246,148 @@ def validate_solver_smoke(solver_log: str) -> dict[str, Any]:
         "residual_sample_count": len(residual_fields),
         "solved_fields": solved_fields,
     }
+
+
+def extract_provisional_responses(
+    solver_log: str,
+    heat_in_w: float,
+    ambient_temperature_c: float,
+) -> dict[str, Any]:
+    t_max_k = _last_number(rf"max\(T\)\s*=\s*({FLOAT})", solver_log)
+    inlet_pressure_pa = _last_number(
+        rf"areaAverage\(inlet\)\s+of\s+p\s*=\s*({FLOAT})", solver_log
+    )
+    outlet_pressure_pa = _last_number(
+        rf"areaAverage\(outlet\)\s+of\s+p\s*=\s*({FLOAT})", solver_log
+    )
+    signed_heat_out_w = _last_number(
+        rf"areaIntegrate\(solid_to_fluid\)\s+of\s+wallHeatFlux\s*=\s*({FLOAT})",
+        solver_log,
+    )
+    t_max_c = t_max_k - 273.15 if t_max_k is not None else None
+    pressure_drop_pa = (
+        inlet_pressure_pa - outlet_pressure_pa
+        if inlet_pressure_pa is not None and outlet_pressure_pa is not None
+        else None
+    )
+    heat_out_w = abs(signed_heat_out_w) if signed_heat_out_w is not None else None
+    energy_imbalance_percent = (
+        abs(heat_in_w - heat_out_w) / max(abs(heat_in_w), 1e-12) * 100
+        if heat_out_w is not None
+        else None
+    )
+    thermal_resistance_k_w = (
+        (t_max_c - ambient_temperature_c) / heat_in_w
+        if t_max_c is not None
+        else None
+    )
+    metrics_present = all(
+        value is not None
+        for value in (t_max_c, pressure_drop_pa, heat_out_w, energy_imbalance_percent)
+    )
+    return {
+        "provisional": True,
+        "metrics_present": metrics_present,
+        "results_available": False,
+        "t_max_c": t_max_c,
+        "thermal_resistance_k_w": thermal_resistance_k_w,
+        "inlet_pressure_pa": inlet_pressure_pa,
+        "outlet_pressure_pa": outlet_pressure_pa,
+        "pressure_drop_pa": pressure_drop_pa,
+        "heat_in_w": heat_in_w,
+        "signed_heat_out_w": signed_heat_out_w,
+        "heat_out_w": heat_out_w,
+        "energy_imbalance_percent": energy_imbalance_percent,
+    }
+
+
+def validate_response_readiness(
+    solver_log: str,
+    heat_in_w: float,
+    ambient_temperature_c: float,
+    criteria: CaeAcceptanceCriteria | None = None,
+    *,
+    allow_results: bool = False,
+) -> dict[str, Any]:
+    criteria = criteria or CaeAcceptanceCriteria()
+    responses = extract_provisional_responses(
+        solver_log, heat_in_w, ambient_temperature_c
+    )
+    temperatures_k = [
+        float(value) for value in re.findall(rf"max\(T\)\s*=\s*({FLOAT})", solver_log)
+    ]
+    inlet_pressures = [
+        float(value)
+        for value in re.findall(
+            rf"areaAverage\(inlet\)\s+of\s+p\s*=\s*({FLOAT})", solver_log
+        )
+    ]
+    outlet_pressures = [
+        float(value)
+        for value in re.findall(
+            rf"areaAverage\(outlet\)\s+of\s+p\s*=\s*({FLOAT})", solver_log
+        )
+    ]
+    heat_rates = [
+        float(value)
+        for value in re.findall(
+            rf"areaIntegrate\(solid_to_fluid\)\s+of\s+wallHeatFlux\s*=\s*({FLOAT})",
+            solver_log,
+        )
+    ]
+    sample_count = min(
+        len(temperatures_k), len(inlet_pressures), len(outlet_pressures), len(heat_rates)
+    )
+    pressure_drops = [
+        inlet - outlet for inlet, outlet in zip(inlet_pressures, outlet_pressures)
+    ]
+    t_max_change_c = (
+        abs(temperatures_k[-1] - temperatures_k[-2])
+        if len(temperatures_k) >= 2
+        else None
+    )
+    pressure_drop_change_pa = (
+        abs(pressure_drops[-1] - pressure_drops[-2])
+        if len(pressure_drops) >= 2
+        else None
+    )
+    temporal_stability = bool(
+        sample_count >= criteria.min_response_samples
+        and t_max_change_c is not None
+        and t_max_change_c <= criteria.max_t_max_change_c
+        and pressure_drop_change_pa is not None
+        and pressure_drop_change_pa <= criteria.max_pressure_drop_change_pa
+    )
+    energy_balance = bool(
+        responses["energy_imbalance_percent"] is not None
+        and responses["energy_imbalance_percent"]
+        <= criteria.max_energy_imbalance_percent
+    )
+    convergence = validate_cae_run("", solver_log, criteria)["gates"]["convergence"]
+    numerical_gates_passed = bool(
+        responses["metrics_present"]
+        and temporal_stability
+        and energy_balance
+        and convergence["passed"]
+    )
+    results_available = bool(numerical_gates_passed and allow_results)
+    return {
+        "results_available": results_available,
+        "numerical_gates_passed": numerical_gates_passed,
+        "mode_allows_results": allow_results,
+        "gates": {
+            "metrics_present": responses["metrics_present"],
+            "temporal_stability": temporal_stability,
+            "convergence": convergence["passed"],
+            "energy_balance": energy_balance,
+            "result_mode": allow_results,
+        },
+        "response_sample_count": sample_count,
+        "minimum_response_samples": criteria.min_response_samples,
+        "t_max_change_c": t_max_change_c,
+        "t_max_change_limit_c": criteria.max_t_max_change_c,
+        "pressure_drop_change_pa": pressure_drop_change_pa,
+        "pressure_drop_change_limit_pa": criteria.max_pressure_drop_change_pa,
+        "provisional_responses": responses,
+        "convergence": convergence,
+    }

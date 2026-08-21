@@ -56,6 +56,7 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert manifest["mesh_strategy"]["target_cells_through_fin_thickness"] == 2
         assert manifest["mesh_strategy"]["per_region_quality_required"] is True
         assert manifest["field_contract"]["smoke_solve_only"] is True
+        assert "solid Tmax" in manifest["field_contract"]["response_extraction"]
         allrun = archive.read("Allrun").decode()
         assert "surfaceCheck constant/triSurface/heatsink.stl" in allrun
         assert "checkMesh -allRegions" in allrun
@@ -63,6 +64,11 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert "changeDictionary -region fluid" in allrun
         assert "changeDictionary -region solid" in allrun
         assert "chtMultiRegionFoam" in archive.read("Allsolve").decode()
+        control = archive.read("system/controlDict").decode()
+        assert "solidTemperature" in control
+        assert "inletPressure" in control
+        assert "outletPressure" in control
+        assert "solidHeatRate" in control
         block_mesh = archive.read("system/blockMeshDict").decode()
         assert "(-0.030000 -0.010000 -0.005000)" in block_mesh
         assert "0.130000" in block_mesh

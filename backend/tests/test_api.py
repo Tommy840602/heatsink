@@ -38,4 +38,5 @@ def test_cae_runtime_requirements_contract():
         "result_policy": "A runtime benchmark never becomes a heat-sink CFD result.",
         "mesh_policy": "A design mesh must pass watertight geometry, region-interface, and per-region quality gates before thermal fields are enabled.",
         "smoke_policy": "A one-step CHT run validates fields, materials, heat source, and solver startup only; it never becomes a design response.",
+        "response_policy": "Responses require at least five stable samples, residual convergence, energy balance, and a non-smoke result mode.",
     }

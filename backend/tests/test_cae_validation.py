@@ -1,7 +1,9 @@
 from app.domain.cae import CaeAcceptanceCriteria
 from app.services.cae_validation import (
+    extract_provisional_responses,
     validate_cae_run,
     validate_region_mesh,
+    validate_response_readiness,
     validate_solver_smoke,
 )
 
@@ -132,3 +134,69 @@ def test_solver_smoke_rejects_fatal_or_incomplete_run():
 
     assert report["passed"] is False
     assert report["fatal_error"] is True
+
+
+def test_provisional_responses_parse_fields_without_claiming_results():
+    solver_log = """
+fieldMinMax solidTemperature write:
+    max(T) = 348.15 in cell 10
+surfaceFieldValue inletPressure write:
+    areaAverage(inlet) of p = 100025
+surfaceFieldValue outletPressure write:
+    areaAverage(outlet) of p = 100000
+surfaceFieldValue solidHeatRate write:
+    areaIntegrate(solid_to_fluid) of wallHeatFlux = -97.5
+"""
+    report = extract_provisional_responses(solver_log, 100, 25)
+
+    assert report["metrics_present"] is True
+    assert report["t_max_c"] == 75
+    assert report["thermal_resistance_k_w"] == 0.5
+    assert report["pressure_drop_pa"] == 25
+    assert report["heat_out_w"] == 97.5
+    assert report["energy_imbalance_percent"] == 2.5
+    assert report["results_available"] is False
+
+
+def test_response_readiness_requires_stability_energy_convergence_and_result_mode():
+    samples = []
+    for index in range(5):
+        samples.append(
+            f"""
+max(T) = {348.0 + index * 0.02}
+areaAverage(inlet) of p = {100025 + index * 0.01}
+areaAverage(outlet) of p = 100000
+areaIntegrate(solid_to_fluid) of wallHeatFlux = -98
+"""
+        )
+    solver_log = "".join(samples) + """
+Solving for Ux, Initial residual = 0.001, Final residual = 0.00001, No Iterations 2
+Solving for h, Initial residual = 0.001, Final residual = 0.00001, No Iterations 2
+Solving for p_rgh, Initial residual = 0.001, Final residual = 0.00001, No Iterations 2
+End
+"""
+    blocked = validate_response_readiness(solver_log, 100, 25, allow_results=False)
+    allowed = validate_response_readiness(solver_log, 100, 25, allow_results=True)
+
+    assert blocked["numerical_gates_passed"] is True
+    assert blocked["results_available"] is False
+    assert allowed["results_available"] is True
+    assert allowed["response_sample_count"] == 5
+
+
+def test_one_step_response_is_rejected_as_unstable_and_energy_imbalanced():
+    solver_log = """
+max(T) = 298.15
+areaAverage(inlet) of p = 100000
+areaAverage(outlet) of p = 100000
+areaIntegrate(solid_to_fluid) of wallHeatFlux = -0.000145
+Solving for Ux, Initial residual = 1, Final residual = 1e-8, No Iterations 1
+Solving for h, Initial residual = 1, Final residual = 1e-8, No Iterations 1
+Solving for p_rgh, Initial residual = 1, Final residual = 1e-8, No Iterations 1
+End
+"""
+    report = validate_response_readiness(solver_log, 100, 25, allow_results=True)
+
+    assert report["results_available"] is False
+    assert report["gates"]["temporal_stability"] is False
+    assert report["gates"]["energy_balance"] is False

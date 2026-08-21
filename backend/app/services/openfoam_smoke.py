@@ -9,12 +9,17 @@ from typing import Any
 
 from app.domain.cae import OpenFoamCaseRequest, OpenFoamSmokeRequest
 from app.repositories.artifacts import ArtifactRepository
-from app.services.cae_validation import validate_region_mesh, validate_solver_smoke
+from app.services.cae_validation import (
+    extract_provisional_responses,
+    validate_region_mesh,
+    validate_solver_smoke,
+    validate_response_readiness,
+)
 from app.services.openfoam import mesh_required_commands, prepare_openfoam_case
 from app.services.openfoam_mesh import _extract_case_package, _process_output
 
 
-SMOKE_CONTRACT_VERSION = "cht-smoke-v1"
+SMOKE_CONTRACT_VERSION = "cht-smoke-v2"
 
 
 def run_openfoam_smoke(
@@ -100,6 +105,16 @@ def run_openfoam_smoke(
 
     mesh_validation = validate_region_mesh(mesh_log, request.criteria)
     smoke_validation = validate_solver_smoke(solver_log)
+    provisional_responses = extract_provisional_responses(
+        solver_log, request.heat_load_w, request.ambient_temperature_c
+    )
+    response_readiness = validate_response_readiness(
+        solver_log,
+        request.heat_load_w,
+        request.ambient_temperature_c,
+        request.criteria,
+        allow_results=False,
+    )
     smoke_passed = bool(
         execution_status == "completed"
         and mesh_validation["acceptance_passed"]
@@ -130,6 +145,8 @@ def run_openfoam_smoke(
         "not_cfd_result": True,
         "mesh_validation": mesh_validation,
         "smoke_validation": smoke_validation,
+        "provisional_responses": provisional_responses,
+        "response_readiness": response_readiness,
         "generated_at": datetime.now(UTC).isoformat(),
         "downloads": {
             "case_package": case["downloads"]["case_package"],

@@ -15,7 +15,7 @@ from app.services.cad import generate_cad
 from app.services.openfoam_thermal_case import thermal_case_files
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v6"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v8"
 
 
 def mesh_required_commands() -> list[str]:
@@ -83,6 +83,7 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
             "solid": "Al 6063-style isotropic thermal properties",
             "interface": "implicit coupled temperature",
             "heat_source": "absolute sensible-enthalpy source in the entire solid region",
+            "response_extraction": "solid Tmax, inlet/outlet area-average pressure, integrated solid interface heat flux",
             "smoke_solve_only": True,
         },
         "case_validated": False,
@@ -139,6 +140,38 @@ startFrom startTime; startTime 0; stopAt endTime; endTime 0.00001;
 deltaT 0.00001; writeControl timeStep; writeInterval 1;
 purgeWrite 1; writeFormat ascii; writePrecision 7;
 runTimeModifiable false; adjustTimeStep false; maxCo 0.3; maxDi 10;
+functions
+{{
+  solidTemperature
+  {{
+    type fieldMinMax; libs (fieldFunctionObjects); region solid;
+    fields (T); executeControl writeTime; writeControl writeTime;
+  }}
+  inletPressure
+  {{
+    type surfaceFieldValue; libs (fieldFunctionObjects); region fluid;
+    regionType patch; name inlet; operation areaAverage; fields (p);
+    executeControl writeTime; writeControl writeTime; writeFields false;
+  }}
+  outletPressure
+  {{
+    type surfaceFieldValue; libs (fieldFunctionObjects); region fluid;
+    regionType patch; name outlet; operation areaAverage; fields (p);
+    executeControl writeTime; writeControl writeTime; writeFields false;
+  }}
+  solidHeatFlux
+  {{
+    type wallHeatFlux; libs (fieldFunctionObjects); region solid;
+    patches (solid_to_fluid); executeControl writeTime; writeControl writeTime;
+  }}
+  solidHeatRate
+  {{
+    type surfaceFieldValue; libs (fieldFunctionObjects); region solid;
+    regionType patch; name solid_to_fluid; operation areaIntegrate;
+    fields (wallHeatFlux); executeControl writeTime; writeControl writeTime;
+    writeFields false;
+  }}
+}}
 """
     block_mesh = f"""FoamFile
 {{ version 2.0; format ascii; class dictionary; object blockMeshDict; }}
