@@ -162,16 +162,63 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 3. Preserve the current volume and take an offline backup before repair. Do not clear `silences` or `nflog` files to suppress the alert.
 4. Run the state restore drill and verify a known silence survives before closing the incident.
 
+## ThermoformPrometheusReplicaDegraded
+
+**Impact:** fewer than two Prometheus replicas are evaluating rules and writing samples, so process-level redundancy is degraded.
+
+1. Identify the missing `instance` in `up{job="thermoform-prometheus"}` and inspect that container's logs and volume.
+2. Confirm the surviving replica still evaluates rules and its remote-write queue is moving.
+3. Restore the failed replica, then verify both external `replica` labels appear through Thanos Query.
+
+## ThermoformThanosReceiveDown
+
+**Impact:** both Prometheus replicas retain local samples, but the shared durable query path is no longer receiving new data.
+
+1. Check Receive readiness, disk capacity, ownership of `/thanos/receive`, WAL errors, and remote-write failures on both Prometheus replicas.
+2. Preserve the Receive volume; do not delete the WAL to recover availability.
+3. Restore Receive and verify pending queues drain without failed-sample growth.
+
+## ThermoformThanosQueryDown
+
+**Impact:** Grafana and shared historical queries are unavailable even though local collection and remote write may continue.
+
+1. Check Query readiness and its StoreAPI connection to `thanos-receive:10901`.
+2. Query each Prometheus locally while repairing Query, then verify the Grafana datasource returns deduplicated data.
+
+## ThermoformRemoteWriteFailure
+
+**Impact:** Prometheus permanently failed to send one or more samples to Thanos Receive.
+
+1. Correlate failed samples with Receive availability, request errors, queue metrics, and WAL logs on each replica.
+2. Confirm local TSDB retention still covers the incident window and record any proven data gap.
+3. Close only after failed counters stop increasing and both replica labels are current in Thanos Query.
+
+## ThermoformRemoteWriteBacklogHigh
+
+**Impact:** queued remote-write samples exceed the configured safety threshold and may exhaust the local WAL window.
+
+1. Compare pending samples, shard count, send latency, and Receive ingestion health for each replica.
+2. Repair downstream capacity before tuning queue limits; verify the backlog trends to zero.
+
 ## Offline backup and restore
 
-The backup tool covers `prometheus-data`, `alertmanager-data`, and `alertmanager-2-data`. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema-1 backups containing only Prometheus and the first Alertmanager remain restorable; the empty second replica converges from the restored peer after startup.
+The backup tool covers both Prometheus volumes, both Alertmanager volumes, and `thanos-receive-data`. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema-1 and schema-2 backups remain restorable; newly introduced volumes start empty and converge or rebuild after startup.
 
-1. Identify the exact Compose project with `docker compose ls` and stop `prometheus`, `alertmanager`, and `alertmanager-2` gracefully.
+1. Identify the exact Compose project with `docker compose ls` and stop `prometheus`, `prometheus-2`, `alertmanager`, `alertmanager-2`, and `thanos-receive` gracefully.
 2. Run `python scripts/observability_state.py backup --project-name <project> --output-dir <new-backup-directory>`.
 3. Start the services again immediately after backup and copy the backup directory to durable storage.
 4. For recovery, preserve or quarantine damaged volumes and let Compose create empty replacements with the same project labels. The tool never deletes or overwrites existing state.
 5. With the target services stopped, run `python scripts/observability_state.py restore --project-name <project> --input-dir <backup-directory> --confirm-empty-volumes`, then start the services.
-6. Verify Prometheus readiness and retention, Alertmanager silences, notification deduplication state, dashboards, and both Alertmanager scrape targets.
+6. Verify both Prometheus replicas and retention, historical data through Thanos Query, Alertmanager silences, notification deduplication state, dashboards, and both Alertmanager scrape targets.
+
+## Prometheus HA and remote-write failover
+
+1. Confirm both Prometheus readiness endpoints are healthy and Thanos Query returns two series with `dedup=false`, distinguished by `replica`.
+2. Stop the first Prometheus, then emit a new drill phase and prove the second replica evaluates and delivers the new alert.
+3. Query the new phase through Thanos and confirm samples continue from `prometheus-2`; old notifications or old samples do not prove continuity.
+4. Restart the first replica and confirm the remote-write backlog drains and Thanos Query's normal deduplicated view contains one logical series.
+
+Both Prometheus replicas and the single Receive process share one Docker host, so this topology does not survive host loss. The Receive volume is durable local remote-write storage, not object storage and not a highly available remote-store cluster.
 
 ## Alertmanager HA failover
 
@@ -194,7 +241,7 @@ The Compose peers share one host and an unencrypted private Docker network. A cr
 
 ## Recovery verification
 
-- Prometheus targets itself, the API, and both Alertmanager replicas are up and all sixteen alert rules are loaded.
+- Both Prometheus replicas target the API, both Alertmanagers, Receive, and Query; all twenty-one alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.

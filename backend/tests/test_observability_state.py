@@ -100,3 +100,42 @@ def test_restore_keeps_schema_one_backups_compatible(tmp_path, monkeypatch):
         ("new-prometheus-data", "prometheus-data.tar.gz"),
         ("new-alertmanager-data", "alertmanager-data.tar.gz"),
     ]
+
+
+def test_restore_keeps_schema_two_backups_compatible(tmp_path, monkeypatch):
+    keys = ("prometheus-data", "alertmanager-data", "alertmanager-2-data")
+    entries = {}
+    for key in keys:
+        archive = tmp_path / f"{key}.tar.gz"
+        entries[key] = {
+            "archive": archive.name,
+            "docker_volume": f"old-{key}",
+            "sha256": archive_with_member(archive, f"./{key}"),
+        }
+    tmp_path.joinpath("manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "project_name": "thermoform",
+                "volumes": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+    restored = []
+    globals_ = restore.__globals__
+    monkeypatch.setitem(globals_, "resolve_volume", lambda _project, key: f"new-{key}")
+    monkeypatch.setitem(globals_, "require_volume_idle", lambda _volume: None)
+    monkeypatch.setitem(globals_, "require_volume_empty", lambda _volume: None)
+    monkeypatch.setitem(
+        globals_,
+        "restore_volume",
+        lambda volume, archive: restored.append((volume, archive.name)),
+    )
+
+    restore("thermoform", tmp_path, confirm_empty_volumes=True)
+
+    assert restored == [
+        (f"new-{key}", f"{key}.tar.gz")
+        for key in keys
+    ]

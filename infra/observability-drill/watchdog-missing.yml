@@ -16,8 +16,22 @@ groups:
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaewatchdogmissing
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
-      - alert: ThermoformAlertmanagerFailoverDrill
+      - alert: ThermoformPrometheusFailoverDrill
         expr: thermoform_observability_drill_phase == 2
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: metrics-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Prometheus HA drill entered the replica-failover phase
+          description: A new alert is emitted only after the primary Prometheus stops, proving the surviving replica still evaluates and delivers alerts.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#prometheus-ha-and-remote-write-failover
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerFailoverDrill
+        expr: thermoform_observability_drill_phase == 3
         labels:
           severity: warning
           service: thermoform-cae

@@ -3,13 +3,25 @@ global:
   evaluation_interval: 15s
   external_labels:
     cluster: thermoform
-    replica: prometheus-1
+    replica: ${THERMOFORM_PROMETHEUS_REPLICA}
 
 rule_files:
   - /etc/prometheus/alerts.yml
   - /etc/prometheus/slo.yml
   - /etc/prometheus/delivery.yml
   - /etc/prometheus/storage.yml
+  - /etc/prometheus/ha.yml
+
+remote_write:
+  - name: thanos-receive
+    url: http://thanos-receive:19291/api/v1/receive
+    remote_timeout: 30s
+    queue_config:
+      capacity: 10000
+      min_shards: 1
+      max_shards: 4
+      max_samples_per_send: 2000
+      batch_send_deadline: 5s
 
 alerting:
   alert_relabel_configs:
@@ -25,7 +37,8 @@ scrape_configs:
   - job_name: thermoform-prometheus
     static_configs:
       - targets:
-          - localhost:9090
+          - prometheus:9090
+          - prometheus-2:9090
 
   - job_name: thermoform-api
     metrics_path: /metrics
@@ -38,3 +51,13 @@ scrape_configs:
       - targets:
           - alertmanager:9093
           - alertmanager-2:9093
+
+  - job_name: thermoform-thanos-receive
+    static_configs:
+      - targets:
+          - thanos-receive:10902
+
+  - job_name: thermoform-thanos-query
+    static_configs:
+      - targets:
+          - thanos-query:10902

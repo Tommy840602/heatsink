@@ -3,7 +3,7 @@ global:
   evaluation_interval: 1s
   external_labels:
     cluster: thermoform-state-drill
-    replica: prometheus-1
+    replica: ${THERMOFORM_PROMETHEUS_REPLICA}
 
 alerting:
   alert_relabel_configs:
@@ -15,8 +15,18 @@ alerting:
             - alertmanager:9093
             - alertmanager-2:9093
 
+remote_write:
+  - name: thanos-receive
+    url: http://thanos-receive:19291/api/v1/receive
+    queue_config:
+      capacity: 1000
+      min_shards: 1
+      max_shards: 2
+      max_samples_per_send: 500
+
 scrape_configs:
   - job_name: thermoform-prometheus
     static_configs:
       - targets:
-          - localhost:9090
+          - prometheus:9090
+          - prometheus-2:9090

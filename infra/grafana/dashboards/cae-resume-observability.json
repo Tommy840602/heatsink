@@ -207,11 +207,46 @@
       "targets": [{ "expr": "min(alertmanager_cluster_members{job=\"thermoform-alertmanager\"})", "refId": "A" }],
       "title": "Alertmanager gossip members",
       "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "max": 2, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 1 }, { "color": "green", "value": 2 }] } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 41 },
+      "id": 15,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "sum(up{job=\"thermoform-prometheus\"})", "refId": "A" }],
+      "title": "Prometheus replicas available",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 41 },
+      "id": 16,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "max(prometheus_remote_storage_samples_pending{remote_name=\"thanos-receive\"})", "legendFormat": "pending", "refId": "A" },
+        { "expr": "sum(increase(prometheus_remote_storage_samples_failed_total{remote_name=\"thanos-receive\"}[1h]))", "legendFormat": "failed / 1h", "refId": "B" }
+      ],
+      "title": "Remote-write queue health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "max": 1, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 41 },
+      "id": 17,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" },
+      "targets": [
+        { "expr": "up{job=~\"thermoform-thanos-(receive|query)\"}", "legendFormat": "{{job}}", "refId": "A" }
+      ],
+      "title": "Thanos service availability",
+      "type": "stat"
     }
   ],
   "refresh": "15s",
   "schemaVersion": 41,
-  "tags": ["thermoform", "cae", "resume", "slo", "error-budget", "storage", "retention", "ha"],
+  "tags": ["thermoform", "cae", "resume", "slo", "error-budget", "storage", "retention", "ha", "remote-write", "thanos"],
   "templating": {
     "list": [
       {
@@ -228,5 +263,5 @@
   "timezone": "browser",
   "title": "CAE Resume Observability",
   "uid": "thermoform-cae-resume",
-  "version": 5
+  "version": 6
 }

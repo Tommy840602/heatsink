@@ -21,8 +21,11 @@ COMPOSE_FILE = (
 )
 PROJECT_NAME = f"thermoform-observability-state-drill-{os.getpid()}"
 PROMETHEUS_URL = "http://127.0.0.1:19100"
+PROMETHEUS_2_URL = "http://127.0.0.1:19104"
 ALERTMANAGER_URL = "http://127.0.0.1:19101"
 ALERTMANAGER_2_URL = "http://127.0.0.1:19102"
+THANOS_QUERY_URL = "http://127.0.0.1:19103"
+THANOS_RECEIVE_URL = "http://127.0.0.1:19105"
 
 
 def compose(*args, check=True):
@@ -73,13 +76,33 @@ def wait_for(description, probe, timeout_seconds):
 
 
 def ready_probe():
-    with urlopen(f"{PROMETHEUS_URL}/-/ready", timeout=3) as response:
-        prometheus_ready = response.status == 200
+    prometheus_ready = all(
+        urlopen(f"{url}/-/ready", timeout=3).status == 200
+        for url in (PROMETHEUS_URL, PROMETHEUS_2_URL)
+    )
     with urlopen(f"{ALERTMANAGER_URL}/-/ready", timeout=3) as response:
         alertmanager_ready = response.status == 200
     with urlopen(f"{ALERTMANAGER_2_URL}/-/ready", timeout=3) as response:
         alertmanager_2_ready = response.status == 200
-    return prometheus_ready and alertmanager_ready and alertmanager_2_ready
+    thanos_ready = all(
+        urlopen(f"{url}/-/ready", timeout=3).status == 200
+        for url in (THANOS_QUERY_URL, THANOS_RECEIVE_URL)
+    )
+    return prometheus_ready and alertmanager_ready and alertmanager_2_ready and thanos_ready
+
+
+def remote_series_probe(query_time=None):
+    suffix = "?query=up%7Bjob%3D%22thermoform-prometheus%22%7D&dedup=false"
+    if query_time is not None:
+        suffix += f"&time={query_time}"
+    payload = get_json(f"{THANOS_QUERY_URL}/api/v1/query{suffix}")
+    if payload.get("status") != "success":
+        return None
+    replicas = {
+        item.get("metric", {}).get("replica")
+        for item in payload.get("data", {}).get("result", [])
+    }
+    return sorted(replicas) if replicas == {"prometheus-1", "prometheus-2"} else None
 
 
 def cluster_probe():
@@ -143,10 +166,12 @@ def main():
     backup_dir = Path(tempfile.mkdtemp(prefix="thermoform-state-backup-"))
     comment = f"restore-drill-{PROJECT_NAME}"
     silence_id = None
+    remote_query_time = None
     try:
         compose("up", "--detach")
         wait_for("Prometheus and Alertmanager readiness", ready_probe, args.timeout)
         wait_for("two-member Alertmanager cluster", cluster_probe, args.timeout)
+        wait_for("both remote-write replicas", remote_series_probe, args.timeout)
         silence_id = create_silence(comment)
         wait_for(
             "silence replication before backup",
@@ -170,9 +195,12 @@ def main():
             "--timeout",
             "20",
             "prometheus",
+            "prometheus-2",
             "alertmanager",
             "alertmanager-2",
+            "thanos-receive",
         )
+        remote_query_time = int(time.time()) - 2
         state_tool(
             "backup",
             "--project-name",
@@ -206,6 +234,11 @@ def main():
         wait_for("restored services readiness", ready_probe, args.timeout)
         wait_for("restored two-member cluster", cluster_probe, args.timeout)
         wait_for(
+            "restored historical remote-write samples",
+            lambda: remote_series_probe(remote_query_time),
+            args.timeout,
+        )
+        wait_for(
             "restored Alertmanager silence",
             lambda: restored_silence_probe(silence_id, comment),
             args.timeout,
@@ -221,7 +254,8 @@ def main():
         )
         print(
             f"PASS: restored silence {silence_id} and verified "
-            f"{len(manifest['volumes'])} checksummed volumes with 7d/64MB retention."
+            f"{len(manifest['volumes'])} checksummed volumes, two Prometheus replicas, "
+            "and historical Thanos Receive samples with 7d/64MB retention."
         )
         return 0
     except (RuntimeError, subprocess.CalledProcessError, OSError, ValueError) as error:

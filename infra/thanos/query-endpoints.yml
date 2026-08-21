@@ -1,0 +1,2 @@
+endpoints:
+  - address: thanos-receive:10901

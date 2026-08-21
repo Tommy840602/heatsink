@@ -1,6 +1,8 @@
 services:
   prometheus:
     image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-1
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -14,6 +16,26 @@ services:
     depends_on:
       - alertmanager
       - alertmanager-2
+      - thanos-receive
+
+  prometheus-2:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=64MB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-2-data:/prometheus
+    ports:
+      - "127.0.0.1:19104:9090"
+    depends_on:
+      - alertmanager
+      - alertmanager-2
+      - thanos-receive
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
@@ -47,7 +69,54 @@ services:
     ports:
       - "127.0.0.1:19102:9093"
 
+  thanos-receive-init:
+    image: alpine:3.22
+    user: "0:0"
+    command: ["chown", "-R", "1001:1001", "/thanos/receive"]
+    volumes:
+      - thanos-receive-data:/thanos/receive
+
+  thanos-receive:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=7d
+      - --tsdb.wal-compression
+      - --tsdb.too-far-in-future.time-window=5m
+      - --receive.replication-factor=1
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform-state-drill"
+    volumes:
+      - ../thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - thanos-receive-data:/thanos/receive
+    ports:
+      - "127.0.0.1:19105:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-query:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - query
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --endpoint=thanos-receive:10901
+      - --query.replica-label=replica
+    ports:
+      - "127.0.0.1:19103:10902"
+    depends_on:
+      - thanos-receive
+
 volumes:
   prometheus-data:
+  prometheus-2-data:
   alertmanager-data:
   alertmanager-2-data:
+  thanos-receive-data:

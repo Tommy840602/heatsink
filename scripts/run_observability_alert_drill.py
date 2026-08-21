@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -19,11 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "infra" / "observability-drill" / "docker-compose.yml"
 PROJECT_NAME = "thermoform-observability-drill"
 PROMETHEUS_URL = "http://127.0.0.1:19090"
+PROMETHEUS_2_URL = "http://127.0.0.1:19091"
 ALERTMANAGER_URL = "http://127.0.0.1:19093"
 ALERTMANAGER_2_URL = "http://127.0.0.1:19095"
 RECEIVER_URL = "http://127.0.0.1:19094"
 METRICS_FIXTURE_URL = "http://127.0.0.1:19096"
+THANOS_QUERY_URL = "http://127.0.0.1:19097"
+THANOS_RECEIVE_URL = "http://127.0.0.1:19098"
 ALERT_NAME = "ThermoformCaeWatchdogMissingDrill"
+PROMETHEUS_FAILOVER_ALERT_NAME = "ThermoformPrometheusFailoverDrill"
 FAILOVER_ALERT_NAME = "ThermoformAlertmanagerFailoverDrill"
 EXPECTED_GROUPS = {
     "thermoform-cae-resume",
@@ -31,6 +36,7 @@ EXPECTED_GROUPS = {
     "thermoform-cae-slo-alerts",
     "thermoform-alert-delivery",
     "thermoform-observability-storage",
+    "thermoform-prometheus-ha",
     "thermoform-cae-observability-drill",
 }
 
@@ -74,8 +80,8 @@ def wait_for(description, probe, timeout_seconds):
     raise RuntimeError(f"timed out waiting for {description}{detail}")
 
 
-def prometheus_alert_probe(alert_name):
-    payload = get_json(f"{PROMETHEUS_URL}/api/v1/rules")
+def prometheus_alert_probe(alert_name, url=PROMETHEUS_URL):
+    payload = get_json(f"{url}/api/v1/rules")
     groups = payload["data"]["groups"]
     names = {group["name"] for group in groups}
     if not EXPECTED_GROUPS.issubset(names):
@@ -85,6 +91,49 @@ def prometheus_alert_probe(alert_name):
             if rule.get("name") == alert_name and rule.get("state") == "firing":
                 return names
     return None
+
+
+def metrics_tier_probe():
+    urls = (
+        f"{PROMETHEUS_URL}/-/ready",
+        f"{PROMETHEUS_2_URL}/-/ready",
+        f"{THANOS_RECEIVE_URL}/-/ready",
+        f"{THANOS_QUERY_URL}/-/ready",
+    )
+    for url in urls:
+        with urlopen(url, timeout=3) as response:
+            if response.status != 200:
+                return None
+    return urls
+
+
+def remote_replica_probe(phase, expected_replicas):
+    parameters = urlencode(
+        {
+            "query": f"thermoform_observability_drill_phase == {phase}",
+            "dedup": "false",
+        }
+    )
+    payload = get_json(f"{THANOS_QUERY_URL}/api/v1/query?{parameters}")
+    if payload.get("status") != "success":
+        return None
+    replicas = {
+        result.get("metric", {}).get("replica")
+        for result in payload.get("data", {}).get("result", [])
+    }
+    replicas.discard(None)
+    return replicas if replicas == set(expected_replicas) else None
+
+
+def deduplicated_remote_probe(phase):
+    parameters = urlencode(
+        {"query": f"thermoform_observability_drill_phase == {phase}"}
+    )
+    payload = get_json(f"{THANOS_QUERY_URL}/api/v1/query?{parameters}")
+    results = payload.get("data", {}).get("result", [])
+    if payload.get("status") != "success" or len(results) != 1:
+        return None
+    return results[0] if "replica" not in results[0].get("metric", {}) else None
 
 
 def cluster_probe():
@@ -219,6 +268,11 @@ def main():
             cluster_probe,
             args.timeout,
         )
+        wait_for(
+            "both Prometheus replicas and the Thanos query path",
+            metrics_tier_probe,
+            args.timeout,
+        )
         silence_comment = f"replicated-{PROJECT_NAME}"
         silence_id = create_silence(silence_comment)
         wait_for(
@@ -242,11 +296,40 @@ def main():
             lambda: receiver_probe(ALERT_NAME),
             args.timeout,
         )
-        compose("stop", "--timeout", "20", "alertmanager", environment=environment)
+        initial_remote_replicas = wait_for(
+            "both Prometheus replicas to remote-write the drill series",
+            lambda: remote_replica_probe(1, {"prometheus-1", "prometheus-2"}),
+            args.timeout,
+        )
+        wait_for(
+            "Thanos Query to expose one deduplicated logical drill series",
+            lambda: deduplicated_remote_probe(1),
+            args.timeout,
+        )
+        compose("stop", "--timeout", "20", "prometheus", environment=environment)
         set_phase(2)
         wait_for(
+            "the surviving Prometheus replica to fire a new alert",
+            lambda: prometheus_alert_probe(
+                PROMETHEUS_FAILOVER_ALERT_NAME, PROMETHEUS_2_URL
+            ),
+            args.timeout,
+        )
+        prometheus_failover_delivery = wait_for(
+            "the Prometheus failover alert to reach the authenticated receiver",
+            lambda: receiver_probe(PROMETHEUS_FAILOVER_ALERT_NAME),
+            args.timeout,
+        )
+        surviving_remote_replicas = wait_for(
+            "the surviving Prometheus replica to continue remote write",
+            lambda: remote_replica_probe(2, {"prometheus-2"}),
+            args.timeout,
+        )
+        compose("stop", "--timeout", "20", "alertmanager", environment=environment)
+        set_phase(3)
+        wait_for(
             "Prometheus to fire a new alert after primary failure",
-            lambda: prometheus_alert_probe(FAILOVER_ALERT_NAME),
+            lambda: prometheus_alert_probe(FAILOVER_ALERT_NAME, PROMETHEUS_2_URL),
             args.timeout,
         )
         failover_receiver = wait_for(
@@ -263,6 +346,9 @@ def main():
             f"PASS: {ALERT_NAME} traversed metrics fixture -> Prometheus -> "
             f"Alertmanager receiver {receiver} -> authenticated webhook fixture; "
             f"initial group {delivery['groupKey']}; "
+            f"remote replicas {sorted(initial_remote_replicas)}; primary Prometheus "
+            f"stop retained {sorted(surviving_remote_replicas)} via group "
+            f"{prometheus_failover_delivery['groupKey']}; "
             f"{len(cluster)} peers replicated silence {silence_id}; primary stop "
             f"failed over {FAILOVER_ALERT_NAME} through {failover_receiver}, group "
             f"{failover_delivery['groupKey']}; {len(rule_groups)} rule groups loaded."

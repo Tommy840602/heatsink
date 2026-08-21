@@ -1,0 +1,6 @@
+[
+  {
+    "hashring": "thermoform",
+    "endpoints": ["thanos-receive:10901"]
+  }
+]

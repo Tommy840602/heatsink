@@ -56,6 +56,10 @@ jobs:
             -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
             prom/prometheus:v3.5.5 \
             test rules /etc/prometheus/tests/storage.test.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.5 \
+            test rules /etc/prometheus/tests/ha.test.yml
 
       - name: Validate Alertmanager routes
         run: |
@@ -96,7 +100,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Exercise clustered Alertmanager replication and failover
+      - name: Exercise Prometheus and Alertmanager HA with remote write
         run: python scripts/run_observability_alert_drill.py
 
   state-drill:

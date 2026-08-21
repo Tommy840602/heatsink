@@ -60,6 +60,8 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-1
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -71,6 +73,7 @@ services:
       - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
       - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
       - ./infra/prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ./infra/prometheus/ha.yml:/etc/prometheus/ha.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -81,6 +84,84 @@ services:
         condition: service_started
       alertmanager-2:
         condition: service_started
+      thanos-receive:
+        condition: service_started
+
+  prometheus-2:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=8GB
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ./infra/prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ./infra/prometheus/ha.yml:/etc/prometheus/ha.yml:ro
+      - prometheus-2-data:/prometheus
+    ports:
+      - "9091:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+      alertmanager-2:
+        condition: service_started
+      thanos-receive:
+        condition: service_started
+
+  thanos-receive-init:
+    image: alpine:3.22
+    user: "0:0"
+    command: ["chown", "-R", "1001:1001", "/thanos/receive"]
+    volumes:
+      - thanos-receive-data:/thanos/receive
+
+  thanos-receive:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=30d
+      - --tsdb.max-retention-bytes=16GB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=1
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform"
+    volumes:
+      - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - thanos-receive-data:/thanos/receive
+    ports:
+      - "10909:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-query:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - query
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --endpoint.sd-config-file=/etc/thanos/query-endpoints.yml
+      - --query.replica-label=replica
+    volumes:
+      - ./infra/thanos/query-endpoints.yml:/etc/thanos/query-endpoints.yml:ro
+    ports:
+      - "10902:10902"
+    depends_on:
+      - thanos-receive
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
@@ -133,7 +214,7 @@ services:
     ports:
       - "3001:3000"
     depends_on:
-      - prometheus
+      - thanos-query
 
   cae-worker:
     profiles: ["cae"]
@@ -172,6 +253,8 @@ volumes:
   redis-data:
   thermoform-artifacts:
   prometheus-data:
+  prometheus-2-data:
   grafana-data:
   alertmanager-data:
   alertmanager-2-data:
+  thanos-receive-data:
