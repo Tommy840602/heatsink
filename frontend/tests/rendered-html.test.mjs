@@ -40,7 +40,7 @@ test("React frontend uses the JavaScript FastAPI client", async () => {
   assert.match(page, /api\s*\.\s*runCaeBenchmark/);
   assert.match(api, /NEXT_PUBLIC_API_URL/);
   assert.match(api, /request\("\/jobs"/);
-  assert.match(api, /request\(`\/jobs\/\$\{job\.job_id\}`\)/);
+  assert.match(api, /request\(`\/jobs\/\$\{jobId\}`\)/);
   assert.match(api, /runJob\(\s*"phase1"/);
   assert.match(api, /\/models\/\$\{modelId\}\/predict/);
   assert.match(api, /runJob\(\s*"phase2"/);
@@ -49,4 +49,25 @@ test("React frontend uses the JavaScript FastAPI client", async () => {
   assert.match(api, /\/cad\/generate/);
   assert.match(api, /\/simulations\/predict/);
   assert.match(layout, /Thermoform — Engineering Intelligence/);
+});
+
+test("CAE Operations wires resumable campaigns to the publication gate", async () => {
+  const [page, apiClient, styles] = await Promise.all([
+    readFile(new URL("../app/page.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/api.js", import.meta.url), "utf8"),
+    readFile(new URL("../app/cae-operations.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /CAE Operations/);
+  assert.match(page, /Checkpoint timeline/);
+  assert.match(page, /Mesh independence/);
+  assert.match(page, /api\s*\.\s*startCaeCampaign/);
+  assert.match(page, /api\s*\.\s*getJob/);
+  assert.match(page, /api\s*\.\s*cancelJob/);
+  assert.match(page, /api\s*\.\s*runMeshStudy/);
+  assert.match(apiClient, /submitJob\("cae_campaign"/);
+  assert.match(apiClient, /runJob\(\s*"cae_mesh_study"/);
+  assert.match(apiClient, /`\/jobs\/\$\{jobId\}\/cancel`/);
+  assert.match(styles, /\.checkpoint-timeline/);
+  assert.match(styles, /\.publication-gate/);
 });

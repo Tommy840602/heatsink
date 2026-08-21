@@ -12,6 +12,7 @@ const nav = [
   ["surrogate", "⌘", "Surrogate Models"],
   ["optimization", "◎", "Optimization"],
   ["digital-twin", "◫", "Digital Twin"],
+  ["cae-operations", "◉", "CAE Operations"],
   ["cad", "⬡", "CAD"],
 ];
 
@@ -38,6 +39,16 @@ const labelFor = (name) =>
     fin_spacing: "Fin spacing",
     air_velocity: "Air velocity",
   })[name] ?? name;
+
+const terminalJobStatuses = new Set([
+  "finished",
+  "failed",
+  "stopped",
+  "canceled",
+]);
+
+const readableState = (value = "pending") =>
+  value.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
 
 function PageHead({ kicker, title, description, badge }) {
   return (
@@ -273,6 +284,16 @@ function ModuleView({
   const [benchmarkArtifact, setBenchmarkArtifact] = useState(null);
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [apiPrediction, setApiPrediction] = useState(null);
+  const [meshProfile, setMeshProfile] = useState("medium");
+  const [targetEndTime, setTargetEndTime] = useState(0.01);
+  const [segmentDuration, setSegmentDuration] = useState(0.001);
+  const [parallelProcesses, setParallelProcesses] = useState(2);
+  const [maxSegments, setMaxSegments] = useState(20);
+  const [campaignJob, setCampaignJob] = useState(null);
+  const [campaignResults, setCampaignResults] = useState({});
+  const [campaignRunning, setCampaignRunning] = useState(false);
+  const [meshStudy, setMeshStudy] = useState(null);
+  const [meshStudyRunning, setMeshStudyRunning] = useState(false);
   const design = useMemo(
     () => ({
       fin_count: fins,
@@ -397,6 +418,83 @@ function ModuleView({
       notify("OpenFOAM benchmark worker unavailable");
     } finally {
       setBenchmarkRunning(false);
+    }
+  };
+  const runCaeCampaign = async () => {
+    setCampaignRunning(true);
+    setMeshStudy(null);
+    notify(`${meshProfile} CAE campaign queued · cancellation stops at a safe checkpoint`);
+    try {
+      let job = await api.startCaeCampaign(cadDesign, {
+        mesh_profile: meshProfile,
+        target_end_time_s: Number(targetEndTime),
+        segment_duration_s: Number(segmentDuration),
+        parallel_processes: Number(parallelProcesses),
+        max_segments: Number(maxSegments),
+      });
+      setCampaignJob(job);
+      setJobStatus(job);
+      while (!terminalJobStatuses.has(job.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        job = await api.getJob(job.job_id);
+        setCampaignJob(job);
+        setJobStatus(job);
+      }
+      if (job.status === "finished" && job.result) {
+        setCampaignResults((current) => ({
+          ...current,
+          [job.result.mesh_profile]: job.result,
+        }));
+        notify(
+          job.result.results_available
+            ? `${readableState(job.result.mesh_profile)} campaign converged · mesh study still required`
+            : `Campaign stopped safely · ${readableState(job.result.stop_reason)}`,
+        );
+      } else {
+        notify(job.error ?? `CAE job ${readableState(job.status)}`);
+      }
+    } catch {
+      notify("CAE campaign queue unavailable · start Redis and the CAE worker");
+    } finally {
+      setCampaignRunning(false);
+    }
+  };
+  const cancelCaeCampaign = async () => {
+    if (!campaignJob || terminalJobStatuses.has(campaignJob.status)) return;
+    try {
+      const job = await api.cancelJob(campaignJob.job_id);
+      setCampaignJob(job);
+      setJobStatus(job);
+      notify("Cancel requested · the current solver segment will finish before stopping");
+    } catch {
+      notify("Unable to request safe cancellation");
+    }
+  };
+  const runMeshIndependenceStudy = async () => {
+    const campaignIds = Object.fromEntries(
+      ["coarse", "medium", "fine"].map((profile) => [
+        profile,
+        campaignResults[profile]?.campaign_id,
+      ]),
+    );
+    if (Object.values(campaignIds).some((value) => !value)) {
+      notify("Complete coarse, medium, and fine campaigns first");
+      return;
+    }
+    setMeshStudyRunning(true);
+    notify("Mesh-independence study queued · medium-to-fine is the publication gate");
+    try {
+      const result = await api.runMeshStudy(campaignIds, setJobStatus);
+      setMeshStudy(result);
+      notify(
+        result.design_result_available
+          ? "Mesh independence passed · fine-mesh design result is publishable"
+          : "Mesh independence did not pass · no design result published",
+      );
+    } catch {
+      notify("Mesh study could not be evaluated");
+    } finally {
+      setMeshStudyRunning(false);
     }
   };
   if (active === "design")
@@ -1324,6 +1422,309 @@ function ModuleView({
         </div>
       </div>
     );
+  if (active === "cae-operations") {
+    const selectedCampaign = campaignResults[meshProfile];
+    const timeline = selectedCampaign?.segments ?? [];
+    const campaignProgress = campaignJob?.progress ?? 0;
+    const allCampaignsConverged = ["coarse", "medium", "fine"].every(
+      (profile) => campaignResults[profile]?.results_available,
+    );
+    const comparisons = meshStudy?.comparisons ?? {};
+    return (
+      <div className="content">
+        <PageHead
+          kicker="PRODUCTION CHT OPERATIONS"
+          title="CAE Operations"
+          description="Run resumable OpenFOAM campaigns, stop safely at checkpoint boundaries, and validate mesh independence."
+          badge={
+            meshStudy?.design_result_available
+              ? "Design result publishable"
+              : campaignRunning
+                ? "Campaign active"
+                : "Publication gated"
+          }
+        />
+        <div className="cae-ops-layout">
+          <section className="panel campaign-controls">
+            <div className="panel-title">
+              <div>
+                <h2>Campaign settings</h2>
+                <p>Each segment saves a resumable solver checkpoint.</p>
+              </div>
+              <span className="tag">chtMultiRegionFoam</span>
+            </div>
+            <div className="profile-tabs" aria-label="Mesh profile">
+              {["coarse", "medium", "fine"].map((profile) => (
+                <button
+                  className={meshProfile === profile ? "selected" : ""}
+                  disabled={campaignRunning}
+                  key={profile}
+                  onClick={() => setMeshProfile(profile)}
+                >
+                  {profile.toUpperCase()}
+                  <small>
+                    {profile === "coarse" ? "0.80×" : profile === "fine" ? "1.25×" : "1.00×"}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <div className="campaign-number-grid">
+              <label>
+                <span>TARGET END TIME</span>
+                <input
+                  type="number"
+                  min="0.0001"
+                  max="10"
+                  step="0.001"
+                  value={targetEndTime}
+                  disabled={campaignRunning}
+                  onChange={(event) => setTargetEndTime(event.target.value)}
+                />
+                <small>seconds</small>
+              </label>
+              <label>
+                <span>SEGMENT DURATION</span>
+                <input
+                  type="number"
+                  min="0.0001"
+                  max="1"
+                  step="0.0001"
+                  value={segmentDuration}
+                  disabled={campaignRunning}
+                  onChange={(event) => setSegmentDuration(event.target.value)}
+                />
+                <small>seconds</small>
+              </label>
+              <label>
+                <span>MPI PROCESSES</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="16"
+                  value={parallelProcesses}
+                  disabled={campaignRunning}
+                  onChange={(event) => setParallelProcesses(event.target.value)}
+                />
+                <small>workers</small>
+              </label>
+              <label>
+                <span>MAX SEGMENTS</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={maxSegments}
+                  disabled={campaignRunning}
+                  onChange={(event) => setMaxSegments(event.target.value)}
+                />
+                <small>checkpoints</small>
+              </label>
+            </div>
+            <button
+              className="primary-action"
+              disabled={campaignRunning}
+              onClick={runCaeCampaign}
+            >
+              {campaignRunning ? `Running ${meshProfile} campaign…` : `Run ${meshProfile} campaign`}
+              <span>→</span>
+            </button>
+          </section>
+          <section className="panel job-console">
+            <div className="panel-title">
+              <div>
+                <h2>Live job</h2>
+                <p>Polled from the isolated thermoform-cae queue.</p>
+              </div>
+              <span className={`job-state ${campaignJob?.status ?? "idle"}`}>
+                {readableState(campaignJob?.status ?? "idle")}
+              </span>
+            </div>
+            <div className="job-identity">
+              <span>JOB ID</span>
+              <code>{campaignJob?.job_id ?? "No campaign submitted"}</code>
+              <small>{campaignJob?.queue ?? "thermoform-cae"}</small>
+            </div>
+            <div className="job-progress-heading">
+              <span>{readableState(campaignJob?.stage ?? "waiting")}</span>
+              <b>{campaignProgress}%</b>
+            </div>
+            <div
+              className="job-progress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={campaignProgress}
+            >
+              <i style={{ width: `${campaignProgress}%` }} />
+            </div>
+            <div className="safe-cancel-note">
+              <i>{campaignJob?.cancel_requested ? "…" : "✓"}</i>
+              <span>
+                <b>{campaignJob?.cancel_requested ? "Cancellation requested" : "Checkpoint-safe cancellation"}</b>
+                <small>
+                  {campaignJob?.cancel_requested
+                    ? "The active segment is allowed to finish before the worker stops."
+                    : "Cancel never interrupts a checkpoint write or leaves a partial resume artifact."}
+                </small>
+              </span>
+            </div>
+            <button
+              className="cancel-action"
+              disabled={
+                !campaignJob ||
+                terminalJobStatuses.has(campaignJob.status) ||
+                campaignJob.cancel_requested
+              }
+              onClick={cancelCaeCampaign}
+            >
+              {campaignJob?.cancel_requested ? "Waiting for safe boundary…" : "Request safe cancel"}
+            </button>
+          </section>
+        </div>
+
+        <section className="panel top-gap checkpoint-panel">
+          <div className="panel-title">
+            <div>
+              <h2>Checkpoint timeline</h2>
+              <p>{meshProfile} campaign · immutable segment snapshots and response-readiness gates.</p>
+            </div>
+            <span className="tag">
+              {selectedCampaign
+                ? `${selectedCampaign.segments_completed} SEGMENTS · ${readableState(selectedCampaign.stop_reason)}`
+                : "NO CHECKPOINTS"}
+            </span>
+          </div>
+          {timeline.length ? (
+            <div className="checkpoint-timeline">
+              {timeline.map((segment) => {
+                const gateValues = Object.values(segment.gates ?? {});
+                const passedGates = gateValues.filter(Boolean).length;
+                return (
+                  <article
+                    className={segment.results_available ? "converged" : ""}
+                    key={segment.solve_run_id ?? segment.index}
+                  >
+                    <i>{segment.results_available ? "✓" : segment.index}</i>
+                    <small>SEGMENT {String(segment.index).padStart(2, "0")}</small>
+                    <strong>{Number(segment.latest_time_s ?? 0).toExponential(2)} s</strong>
+                    <span>{segment.response_sample_count} response samples</span>
+                    <span>{passedGates} / {gateValues.length} readiness gates</span>
+                    <code>{segment.solve_run_id}</code>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-timeline">
+              <strong>No {meshProfile} campaign report yet</strong>
+              <span>Run a campaign to build the checkpoint timeline.</span>
+            </div>
+          )}
+          {selectedCampaign && (
+            <div className="campaign-stop-summary">
+              <div>
+                <small>STOP REASON</small>
+                <strong>{readableState(selectedCampaign.stop_reason)}</strong>
+              </div>
+              <div>
+                <small>LATEST / TARGET</small>
+                <strong>{Number(selectedCampaign.latest_time_s).toExponential(2)} / {Number(selectedCampaign.target_end_time_s).toExponential(2)} s</strong>
+              </div>
+              <div>
+                <small>NEXT RESUME</small>
+                <code>{selectedCampaign.next_resume_run_id ?? "Not available"}</code>
+              </div>
+              {selectedCampaign.downloads?.latest_checkpoint && (
+                <button
+                  className="text-button"
+                  onClick={() => downloadCadArtifact(selectedCampaign.downloads.latest_checkpoint)}
+                >
+                  Download checkpoint ↓
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="panel top-gap mesh-study-panel">
+          <div className="panel-title">
+            <div>
+              <h2>Mesh independence</h2>
+              <p>Coarse / medium / fine comparison · medium-to-fine controls publication.</p>
+            </div>
+            <span className={`publication-status ${meshStudy?.design_result_available ? "passed" : "gated"}`}>
+              {meshStudy?.design_result_available ? "PUBLISHABLE" : "RESULT GATED"}
+            </span>
+          </div>
+          <div className="mesh-profile-grid">
+            {["coarse", "medium", "fine"].map((profile) => {
+              const result = campaignResults[profile];
+              return (
+                <article className={result?.results_available ? "converged" : ""} key={profile}>
+                  <div>
+                    <span>{profile.toUpperCase()}</span>
+                    <b>{profile === "coarse" ? "0.80×" : profile === "fine" ? "1.25×" : "1.00×"}</b>
+                  </div>
+                  <strong>{result ? readableState(result.status) : "Not run"}</strong>
+                  <small>{result?.campaign_id ?? "Campaign ID pending"}</small>
+                  <p>
+                    {result?.results_available
+                      ? "Numerically converged"
+                      : result
+                        ? readableState(result.stop_reason)
+                        : "Required for mesh study"}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+          <button
+            className="primary-action mesh-study-action"
+            disabled={!allCampaignsConverged || meshStudyRunning}
+            onClick={runMeshIndependenceStudy}
+          >
+            {meshStudyRunning ? "Evaluating mesh independence…" : "Evaluate publication gate"}
+            <span>→</span>
+          </button>
+          {Object.keys(comparisons).length > 0 && (
+            <div className="study-comparisons">
+              {Object.entries(comparisons).map(([name, comparison]) => (
+                <article key={name}>
+                  <strong>{readableState(name)}</strong>
+                  <div>
+                    <span>Tmax Δ</span>
+                    <b>{comparison.t_max_relative_change_percent.toFixed(3)}%</b>
+                    <i style={{ width: `${Math.min(comparison.t_max_relative_change_percent * 20, 100)}%` }} />
+                    <small>limit {meshStudy.limits.max_t_max_relative_change_percent}%</small>
+                  </div>
+                  <div>
+                    <span>Pressure Δ</span>
+                    <b>{comparison.pressure_drop_relative_change_percent.toFixed(3)}%</b>
+                    <i style={{ width: `${Math.min(comparison.pressure_drop_relative_change_percent * 4, 100)}%` }} />
+                    <small>limit {meshStudy.limits.max_pressure_drop_relative_change_percent}%</small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          <div className={`publication-gate ${meshStudy?.design_result_available ? "passed" : ""}`}>
+            <i>{meshStudy?.design_result_available ? "✓" : "!"}</i>
+            <div>
+              <strong>
+                {meshStudy?.design_result_available
+                  ? "Fine-mesh result cleared for engineering review"
+                  : "No publishable CFD design result"}
+              </strong>
+              <p>
+                {meshStudy?.notice ??
+                  "A numerically converged campaign is only a candidate. All three mesh profiles and the configured response-change limits must pass."}
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
   return (
     <div className="content">
       <PageHead

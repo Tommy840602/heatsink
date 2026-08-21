@@ -20,6 +20,8 @@ Phase 3.6 adds the resumable `cae_solve` production contract. Each run can resto
 
 Phase 3.7 adds `cae_campaign` for automatic checkpoint chaining with target-time, segment-count, and wall-clock budgets plus cooperative cancellation at safe checkpoint boundaries. Mesh profiles are now part of the case fingerprint (`coarse=0.8×`, `medium=1.0×`, `fine=1.25×`), and `cae_mesh_study` is the final publication gate: all three campaigns must converge and the medium-to-fine Tmax and pressure-drop changes must stay within configured limits.
 
+Phase 3.8 exposes those operations in React. The CAE Operations workspace configures and polls one resumable campaign at a time, requests cooperative cancellation, renders checkpoint and stop-reason history, tracks coarse/medium/fine convergence separately, and enables the mesh-independence publication gate only after all three campaigns have numerically converged.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -43,7 +45,7 @@ Browser
 ```
 
 ```text
-frontend/   React 19, JavaScript/JSX, Vinext/Vite, responsive engineering UI
+frontend/   React 19, JavaScript/JSX, Vinext/Vite, responsive engineering and CAE operations UI
 backend/    FastAPI, Pydantic, pyDOE3, SciPy, scikit-learn, XGBoost, pymoo
 ```
 
@@ -131,6 +133,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 ## Async jobs and OpenFOAM handoff
 
 - The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
+- CAE Operations submits `cae_campaign` without blocking the UI, displays queue progress and `cancel_requested`, and makes the safe checkpoint boundary explicit. Completed reports provide the checkpoint timeline, stop reason, latest/target time, resume ID, and checkpoint download.
+- Coarse, medium, and fine campaign cards remain distinct. The React client enables `cae_mesh_study` only when every profile reports numerical convergence, and keeps the publication warning visible until the backend returns `design_result_available=true`.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.
@@ -157,7 +161,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 
 ```bash
 cd backend && .venv/bin/pytest
-cd frontend && npm run build
+cd frontend && npm test && npm run build
 ```
 
 The frontend retains a read-only preview if the API is unavailable. Clicking **Run workflow** while FastAPI is connected replaces the demo values across DOE, simulation, analysis, surrogate, optimization, and digital-twin views with one traceable Phase 1 result.

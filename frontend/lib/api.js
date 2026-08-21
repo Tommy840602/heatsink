@@ -11,11 +11,23 @@ async function request(path, options) {
   return response.json();
 }
 
-async function runJob(task, payload, onStatus) {
-  let job = await request("/jobs", {
+async function submitJob(task, payload) {
+  return request("/jobs", {
     method: "POST",
     body: JSON.stringify({ task, payload }),
   });
+}
+
+async function getJob(jobId) {
+  return request(`/jobs/${jobId}`);
+}
+
+async function cancelJob(jobId) {
+  return request(`/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+async function runJob(task, payload, onStatus) {
+  let job = await submitJob(task, payload);
   onStatus?.(job);
   for (let attempt = 0; attempt < 240; attempt += 1) {
     if (job.status === "finished") return job.result;
@@ -23,13 +35,16 @@ async function runJob(task, payload, onStatus) {
       throw new Error(job.error ?? `${task} job failed`);
     }
     await new Promise((resolve) => window.setTimeout(resolve, 750));
-    job = await request(`/jobs/${job.job_id}`);
+    job = await getJob(job.job_id);
     onStatus?.(job);
   }
   throw new Error(`${task} job timed out while polling`);
 }
 
 export const api = {
+  submitJob,
+  getJob,
+  cancelJob,
   health: () => request("/health"),
   validateDesign: (design) =>
     request("/designs/validate", {
@@ -103,6 +118,27 @@ export const api = {
           max_energy_imbalance_percent: 5,
           min_residual_samples: 3,
         },
+      },
+      onStatus,
+    ),
+  startCaeCampaign: (design, settings) =>
+    submitJob("cae_campaign", {
+      design,
+      heat_load_w: 100,
+      ambient_temperature_c: 25,
+      delta_t_s: 0.00001,
+      write_interval_steps: 10,
+      segment_runtime_seconds: 3600,
+      max_total_runtime_seconds: 18000,
+      ...settings,
+    }),
+  runMeshStudy: (campaignIds, onStatus) =>
+    runJob(
+      "cae_mesh_study",
+      {
+        campaign_ids: campaignIds,
+        max_t_max_relative_change_percent: 1,
+        max_pressure_drop_relative_change_percent: 5,
       },
       onStatus,
     ),
