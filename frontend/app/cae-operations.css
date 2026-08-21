@@ -515,6 +515,27 @@
   color: #89918e;
 }
 
+.resume-reconciliation-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  color: #89918e;
+  font-size: 7px;
+}
+
+.resume-reconciliation-status strong {
+  margin-right: auto;
+  color: #737d79;
+  font-size: 6px;
+  letter-spacing: 0.6px;
+}
+
+.resume-reconciliation-status span {
+  border-left: 1px solid var(--line);
+  padding-left: 7px;
+}
+
 .resume-lineage-list {
   display: grid;
   grid-template-columns: 1fr 1fr;

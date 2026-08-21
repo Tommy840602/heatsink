@@ -21,6 +21,7 @@ from app.services.cae_resume import (
     preview_campaign_resume,
     retry_campaign_resume,
 )
+from app.services.cae_reconciliation import reconcile_resume_attempts
 
 
 router = APIRouter(prefix="/api/v1")
@@ -70,6 +71,23 @@ def campaigns(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
 def resume_attempts(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
     reports = list_resume_dispatches(repository, limit)
     return {"resume_attempts": reports, "count": len(reports)}
+
+
+@router.post("/cae/resume-attempts/reconcile")
+def reconcile_attempts(
+    limit: int = Query(default=50, ge=1, le=100),
+    stale_after_seconds: int = Query(default=900, ge=30, le=604800),
+    queue: JobQueue = Depends(get_job_queue),
+) -> dict[str, Any]:
+    try:
+        return reconcile_resume_attempts(
+            repository,
+            queue,
+            limit=limit,
+            stale_after_seconds=stale_after_seconds,
+        )
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
 
 
 @router.get("/cae/campaigns/{campaign_id}")

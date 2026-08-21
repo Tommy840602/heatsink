@@ -155,6 +155,11 @@ export const api = {
     request(`/cae/campaigns?limit=${limit}`),
   listCaeResumeAttempts: (limit = 50) =>
     request(`/cae/resume-attempts?limit=${limit}`),
+  reconcileCaeResumeAttempts: (limit = 50, staleAfterSeconds = 900) =>
+    request(
+      `/cae/resume-attempts/reconcile?limit=${limit}&stale_after_seconds=${staleAfterSeconds}`,
+      { method: "POST" },
+    ),
   retryCaeResumeAttempt: (attemptId) =>
     request(`/cae/resume-attempts/${attemptId}/retry`, {
       method: "POST",

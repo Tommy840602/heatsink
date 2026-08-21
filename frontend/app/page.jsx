@@ -299,6 +299,7 @@ function ModuleView({
   const [campaignHistory, setCampaignHistory] = useState([]);
   const [meshStudyHistory, setMeshStudyHistory] = useState([]);
   const [resumeHistory, setResumeHistory] = useState([]);
+  const [resumeReconciliation, setResumeReconciliation] = useState(null);
   const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
   const [resumeChecking, setResumeChecking] = useState(false);
   const [resumePreview, setResumePreview] = useState(null);
@@ -600,6 +601,18 @@ function ModuleView({
   };
   const loadCaeHistory = async (announce = false) => {
     setCaeHistoryLoading(true);
+    let reconciliation = null;
+    try {
+      reconciliation = await api.reconcileCaeResumeAttempts();
+      setResumeReconciliation(reconciliation);
+      if (reconciliation.reconciled > 0) {
+        notify(
+          `Recovered ${reconciliation.reconciled} orphaned resume attempt${reconciliation.reconciled === 1 ? "" : "s"}`,
+        );
+      }
+    } catch {
+      setResumeReconciliation(null);
+    }
     try {
       const [campaignIndex, studyIndex, resumeIndex] = await Promise.all([
         api.listCaeCampaigns(),
@@ -1924,6 +1937,14 @@ function ModuleView({
               <h3>RESUME LINEAGE</h3>
               <span>{resumeHistory.length} deterministic attempts</span>
             </div>
+            {resumeReconciliation && (
+              <div className="resume-reconciliation-status">
+                <strong>RQ RECONCILIATION</strong>
+                <span>{resumeReconciliation.reconciled} repaired</span>
+                <span>{resumeReconciliation.active} active</span>
+                <span>{resumeReconciliation.pending_grace} in grace period</span>
+              </div>
+            )}
             {resumeHistory.length ? (
               <div className="resume-lineage-list">
                 {resumeHistory.slice(0, 6).map((attempt) => (
