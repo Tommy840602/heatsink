@@ -42,6 +42,28 @@ services:
       redis:
         condition: service_healthy
 
+  cae-worker:
+    profiles: ["cae"]
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.openfoam
+    command: rq worker --url redis://redis:6379/0 --name openfoam-v2312-worker thermoform-cae
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+    volumes:
+      - thermoform-artifacts:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/openfoam-worker", "foamVersion"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   frontend:
     build:
       context: ./frontend

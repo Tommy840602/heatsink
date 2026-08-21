@@ -41,10 +41,17 @@ backend/    FastAPI, Pydantic, pyDOE3, SciPy, scikit-learn, XGBoost, pymoo
 docker compose up --build
 ```
 
+Start the pinned OpenFOAM worker as an explicit CAE profile:
+
+```bash
+docker compose --profile cae up --build
+```
+
 - Frontend: http://localhost:3000
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
 - Redis and the RQ worker run as internal Compose services.
+- The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
 ## Local development
 
@@ -91,6 +98,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
+| `GET` | `/api/v1/cae/runtime-requirements` | Read the pinned CAE distribution, architecture, tutorial, and queue contract |
 
 ## Phase 1 behavior
 
@@ -110,6 +118,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 ## Async jobs and OpenFOAM handoff
 
 - The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
+- Phase 1, Phase 2, and case packaging use `thermoform`; `cae_benchmark` is isolated on `thermoform-cae`, so a general worker cannot accidentally claim a solver task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the exact parametric STL, case manifest, `blockMesh`, `snappyHexMesh`, region-splitting setup, and a fail-fast `Allrun` script targeting `chtMultiRegionFoam`.
 - Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
@@ -117,6 +126,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - The benchmark worker targets the official OpenCFD OpenFOAM v2312 `multiRegionHeater` tutorial. Start the worker from a sourced OpenFOAM shell and expose either `FOAM_TUTORIALS` or `THERMOFORM_OPENFOAM_BENCHMARK_CASE`.
 - A tutorial benchmark passes only after successful execution, `Mesh OK`, mesh limits, an `End` marker, and converged final residuals. It still returns `results_available=false` because it is not the optimized heat-sink geometry.
 - A design result additionally requires standardized `THERMOFORM_METRIC` values for `t_max_c`, `pressure_drop_pa`, `heat_in_w`, and `heat_out_w`; the energy imbalance must remain within the configured limit.
+- `Dockerfile.openfoam` pins the official `2312.260127-2` runtime/common/tutorial packages and verifies all three repository SHA-256 values before installation. The image uses `linux/amd64`, matching the published OpenCFD Debian binaries; Apple Silicon Docker uses emulation for this worker.
+- The CAE worker entrypoint sources the packaged OpenFOAM environment, verifies `foamVersion`, checks the official tutorial directory, exports its resolved location, and exits before starting RQ if any capability is absent.
 
 ## Verification
 

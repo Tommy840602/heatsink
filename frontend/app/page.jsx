@@ -710,7 +710,11 @@ function ModuleView({
             <div className="artifact">
               <span>BACKGROUND JOB</span>
               <code>{caeRunning || benchmarkRunning ? `${jobStatus?.progress ?? 0}%` : jobStatus?.job_id ?? "Idle"}</code>
-              <small>{jobStatus?.stage?.replaceAll("_", " ") ?? "Submit through Redis/RQ"}</small>
+              <small>
+                {jobStatus
+                  ? `${jobStatus.queue} · ${jobStatus.stage.replaceAll("_", " ")}`
+                  : "Submit through Redis/RQ"}
+              </small>
             </div>
             <div className="artifact">
               <span>OPENFOAM CASE</span>

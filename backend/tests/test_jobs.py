@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.jobs import get_job_queue
+from app.services.jobs import CAE_QUEUE_NAME, DEFAULT_QUEUE_NAME, get_job_queue, queue_name_for_task
 
 
 class FakeQueue:
@@ -45,3 +45,9 @@ def test_job_api_returns_202_and_exposes_completed_result():
         assert finished.json()["result"]["results_available"] is False
     finally:
         app.dependency_overrides.clear()
+
+
+def test_cae_benchmark_isolated_queue_routing():
+    assert queue_name_for_task("cae_benchmark") == CAE_QUEUE_NAME
+    assert queue_name_for_task("cae") == DEFAULT_QUEUE_NAME
+    assert queue_name_for_task("phase1") == DEFAULT_QUEUE_NAME

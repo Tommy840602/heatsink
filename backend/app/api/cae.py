@@ -6,10 +6,25 @@ from fastapi.responses import FileResponse
 from app.domain.cae import OpenFoamCaseRequest
 from app.repositories.artifacts import ArtifactRepository
 from app.services.openfoam import prepare_openfoam_case
+from app.services.jobs import CAE_QUEUE_NAME
+from app.services.openfoam_benchmark import OPENFOAM_TARGET, TUTORIAL_RELATIVE_PATH
 
 
 router = APIRouter(prefix="/api/v1")
 repository = ArtifactRepository()
+
+
+@router.get("/cae/runtime-requirements")
+def runtime_requirements() -> dict[str, Any]:
+    return {
+        "target_distribution": OPENFOAM_TARGET,
+        "architecture": "linux/amd64",
+        "queue": CAE_QUEUE_NAME,
+        "tutorial": str(TUTORIAL_RELATIVE_PATH),
+        "worker_profile": "cae",
+        "package_source": "https://dl.openfoam.com/repos/deb/",
+        "result_policy": "A runtime benchmark never becomes a heat-sink CFD result.",
+    }
 
 
 @router.post("/cae/cases")

@@ -19,3 +19,4 @@ class JobSnapshot(BaseModel):
     error: str | None = None
     progress: int = Field(default=0, ge=0, le=100)
     stage: str = "queued"
+    queue: str = "thermoform"

@@ -9,7 +9,12 @@ from rq.job import Job
 from app.services.job_tasks import execute_job
 
 
-QUEUE_NAME = "thermoform"
+DEFAULT_QUEUE_NAME = "thermoform"
+CAE_QUEUE_NAME = "thermoform-cae"
+
+
+def queue_name_for_task(task: str) -> str:
+    return CAE_QUEUE_NAME if task == "cae_benchmark" else DEFAULT_QUEUE_NAME
 
 
 class JobQueue(Protocol):
@@ -26,13 +31,17 @@ class RqJobQueue:
         self.connection = Redis.from_url(
             redis_url or os.getenv("THERMOFORM_REDIS_URL", "redis://localhost:6379/0")
         )
-        self.queue = Queue(QUEUE_NAME, connection=self.connection, default_timeout=7200)
+        self.queues = {
+            DEFAULT_QUEUE_NAME: Queue(DEFAULT_QUEUE_NAME, connection=self.connection, default_timeout=7200),
+            CAE_QUEUE_NAME: Queue(CAE_QUEUE_NAME, connection=self.connection, default_timeout=7200),
+        }
 
     def enqueue(self, task: str, payload: dict[str, Any]) -> dict[str, Any]:
-        job = self.queue.enqueue_call(
+        queue_name = queue_name_for_task(task)
+        job = self.queues[queue_name].enqueue_call(
             func=execute_job,
             args=(task, payload),
-            meta={"task": task, "progress": 0, "stage": "queued"},
+            meta={"task": task, "progress": 0, "stage": "queued", "queue": queue_name},
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -56,6 +65,7 @@ class RqJobQueue:
             "error": job.exc_info.splitlines()[-1] if status == "failed" and job.exc_info else None,
             "progress": job.meta.get("progress", 0),
             "stage": job.meta.get("stage", status),
+            "queue": job.meta.get("queue", job.origin),
         }
 
 
