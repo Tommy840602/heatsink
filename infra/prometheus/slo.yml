@@ -1,0 +1,97 @@
+groups:
+  - name: thermoform-cae-slo-recording
+    interval: 30s
+    rules:
+      - record: thermoform_cae:sli_recovery_available
+        expr: |
+          (
+            up{job="thermoform-api"}
+            * on(job, instance)
+            thermoform_cae_observability_healthy{job="thermoform-api"}
+          )
+          or
+          (up{job="thermoform-api"} == 0)
+
+      - record: thermoform_cae:slo_recovery_availability:ratio_5m
+        expr: avg_over_time(thermoform_cae:sli_recovery_available[5m])
+
+      - record: thermoform_cae:slo_recovery_availability:ratio_30m
+        expr: avg_over_time(thermoform_cae:sli_recovery_available[30m])
+
+      - record: thermoform_cae:slo_recovery_availability:ratio_1h
+        expr: avg_over_time(thermoform_cae:sli_recovery_available[1h])
+
+      - record: thermoform_cae:slo_recovery_availability:ratio_6h
+        expr: avg_over_time(thermoform_cae:sli_recovery_available[6h])
+
+      - record: thermoform_cae:slo_recovery_availability:ratio_30d
+        expr: avg_over_time(thermoform_cae:sli_recovery_available[30d])
+
+      - record: thermoform_cae:slo_recovery_error_budget:burn_rate_5m
+        expr: (1 - thermoform_cae:slo_recovery_availability:ratio_5m) / 0.005
+
+      - record: thermoform_cae:slo_recovery_error_budget:burn_rate_30m
+        expr: (1 - thermoform_cae:slo_recovery_availability:ratio_30m) / 0.005
+
+      - record: thermoform_cae:slo_recovery_error_budget:burn_rate_1h
+        expr: (1 - thermoform_cae:slo_recovery_availability:ratio_1h) / 0.005
+
+      - record: thermoform_cae:slo_recovery_error_budget:burn_rate_6h
+        expr: (1 - thermoform_cae:slo_recovery_availability:ratio_6h) / 0.005
+
+      - record: thermoform_cae:slo_recovery_error_budget:remaining_ratio_30d
+        expr: clamp_min(1 - ((1 - thermoform_cae:slo_recovery_availability:ratio_30d) / 0.005), 0)
+
+  - name: thermoform-cae-slo-alerts
+    interval: 30s
+    rules:
+      - alert: ThermoformCaeRecoverySloFastBurn
+        expr: |
+          thermoform_cae:slo_recovery_error_budget:burn_rate_5m > 14.4
+          and
+          thermoform_cae:slo_recovery_error_budget:burn_rate_1h > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          service: thermoform-cae
+          component: resume-recovery
+          team: thermal-platform
+          objective: "99.5"
+        annotations:
+          summary: CAE recovery SLO error budget is burning rapidly
+          description: Both the five-minute and one-hour recovery availability windows exceed a 14.4x error-budget burn rate.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaerecoveryslofastburn
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformCaeRecoverySloSlowBurn
+        expr: |
+          thermoform_cae:slo_recovery_error_budget:burn_rate_30m > 6
+          and
+          thermoform_cae:slo_recovery_error_budget:burn_rate_6h > 6
+        for: 15m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: resume-recovery
+          team: thermal-platform
+          objective: "99.5"
+        annotations:
+          summary: CAE recovery SLO error budget is burning persistently
+          description: Both the thirty-minute and six-hour recovery availability windows exceed a 6x error-budget burn rate.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaerecoverysloslowburn
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformCaeRecoverySliMissing
+        expr: absent(thermoform_cae:sli_recovery_available)
+        for: 5m
+        labels:
+          severity: critical
+          service: thermoform-cae
+          component: resume-recovery
+          team: thermal-platform
+          objective: "99.5"
+        annotations:
+          summary: CAE recovery SLI cannot be evaluated
+          description: Prometheus cannot combine API availability with the durable recovery-health metric, so burn-rate calculations are unavailable.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaerecoveryslimissing
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume

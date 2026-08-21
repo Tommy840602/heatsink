@@ -1,0 +1,41 @@
+FROM python:3.12-slim-bookworm
+
+ARG OPENFOAM_VERSION=2312.260127-2
+ARG OPENFOAM_POOL=2312_260127
+ARG OPENFOAM_RUNTIME_SHA256=05a193dc87ea187c1a2e7ed765203613423d821fcd3b5e851899ae98fed90d3c
+ARG OPENFOAM_COMMON_SHA256=ba7625fe225060ad10f5db84149633d7726c2618fbe0442b492ecb7271eda864
+ARG OPENFOAM_TUTORIALS_SHA256=4531f506b61dd41580dc1baf4bd5a4142c8b51a43e70972430934f4276efc6ae
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2312/etc/bashrc
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && runtime_url="https://dl.openfoam.com/repos/deb/dists/bookworm/main/pool/${OPENFOAM_POOL}/binary-amd64/openfoam2312_${OPENFOAM_VERSION}_amd64.deb" \
+    && common_url="https://dl.openfoam.com/repos/deb/dists/bookworm/main/pool/${OPENFOAM_POOL}/binary-all/openfoam2312-common_${OPENFOAM_VERSION}_all.deb" \
+    && tutorials_url="https://dl.openfoam.com/repos/deb/dists/bookworm/main/pool/${OPENFOAM_POOL}/binary-all/openfoam2312-tutorials_${OPENFOAM_VERSION}_all.deb" \
+    && curl --fail --location --retry 4 --output /tmp/openfoam-runtime.deb "$runtime_url" \
+    && curl --fail --location --retry 4 --output /tmp/openfoam-common.deb "$common_url" \
+    && curl --fail --location --retry 4 --output /tmp/openfoam-tutorials.deb "$tutorials_url" \
+    && printf '%s  %s\n' "$OPENFOAM_RUNTIME_SHA256" /tmp/openfoam-runtime.deb "$OPENFOAM_COMMON_SHA256" /tmp/openfoam-common.deb "$OPENFOAM_TUTORIALS_SHA256" /tmp/openfoam-tutorials.deb | sha256sum --check \
+    && apt-get install --yes --no-install-recommends /tmp/openfoam-common.deb /tmp/openfoam-runtime.deb /tmp/openfoam-tutorials.deb \
+    && rm -f /tmp/openfoam-runtime.deb /tmp/openfoam-common.deb /tmp/openfoam-tutorials.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+        "pydantic>=2.10,<3" \
+        "redis>=5.2,<7" \
+        "rq>=2.1,<3" \
+    && useradd --create-home thermoform \
+    && mkdir --parents /data \
+    && chown thermoform:thermoform /data
+
+COPY app ./app
+COPY --chmod=0755 openfoam-worker.sh /usr/local/bin/openfoam-worker
+
+USER thermoform
+ENTRYPOINT ["/usr/local/bin/openfoam-worker"]
+CMD ["rq", "worker", "--url", "redis://redis:6379/0", "thermoform-cae"]

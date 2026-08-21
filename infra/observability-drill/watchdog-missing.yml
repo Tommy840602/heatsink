@@ -1,0 +1,59 @@
+groups:
+  - name: thermoform-cae-observability-drill
+    interval: 1s
+    rules:
+      - alert: ThermoformCaeWatchdogMissingDrill
+        expr: thermoform_observability_drill_phase == 1
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: resume-recovery
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Alert-routing drill detected the missing CAE watchdog fixture
+          description: An isolated metrics fixture exercises Prometheus evaluation and the production Alertmanager warning route.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaewatchdogmissing
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformReceiveFailoverDrill
+        expr: thermoform_observability_drill_phase == 2
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: remote-write-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Receive quorum drill entered the ingester-failover phase
+          description: A new series is emitted only after the first Receive stops, proving RF=3 reaches quorum through the remaining two ingesters.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thanos-receive-quorum-failover
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformPrometheusFailoverDrill
+        expr: thermoform_observability_drill_phase == 3
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: metrics-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Prometheus HA drill entered the replica-failover phase
+          description: A new alert is emitted only after the primary Prometheus stops, proving the surviving replica still evaluates and delivers alerts.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#prometheus-ha-and-remote-write-failover
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerFailoverDrill
+        expr: thermoform_observability_drill_phase == 4
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: alert-delivery-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Alertmanager HA drill entered the failover phase
+          description: A new alert is emitted only after the primary Alertmanager stops, proving the surviving peer still accepts and delivers notifications.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#alertmanager-ha-failover
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume

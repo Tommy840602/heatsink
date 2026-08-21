@@ -1,0 +1,188 @@
+rule_files:
+  - ../ha.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: one prometheus replica preserves evaluation with degraded redundancy
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-prometheus", instance="prometheus:9090"}
+        values: 0x5
+      - series: up{job="thermoform-prometheus", instance="prometheus-2:9090"}
+        values: 1x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformPrometheusReplicaDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: metrics-ha
+              team: thermal-platform
+            exp_annotations:
+              summary: Only one Prometheus replica is reachable
+              description: Metrics collection and alert evaluation continue, but the two-replica Prometheus tier has lost failover capacity.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformprometheusreplicadegraded
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: remote receive and query outages remain distinct
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-2:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-3:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-query", instance="thanos-query:10902"}
+        values: 0x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformThanosReceiveDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: thermoform-cae
+              component: remote-write
+              team: thermal-platform
+            exp_annotations:
+              summary: The Thanos Receive write quorum is unavailable
+              description: Fewer than two of three Receive ingesters are healthy, so RF=3 remote writes cannot reach quorum.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosreceivedown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+      - eval_time: 2m
+        alertname: ThermoformThanosQueryDown
+        exp_alerts:
+          - exp_labels:
+              instance: thanos-query:10902
+              job: thermoform-thanos-query
+              severity: warning
+              service: thermoform-cae
+              component: remote-query
+              team: thermal-platform
+            exp_annotations:
+              summary: The deduplicated Thanos query path is unreachable
+              description: Prometheus alerting remains active, but Grafana cannot query the shared replica-deduplicated metrics view.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosquerydown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: one receive loss degrades replication without total outage
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-2:10902"}
+        values: 1x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-3:10902"}
+        values: 1x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformThanosReceiveReplicaDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: remote-write-ha
+              team: thermal-platform
+            exp_annotations:
+              summary: The Thanos Receive replication tier is degraded
+              description: At least one of three Receive replicas is unavailable; RF=3 writes can continue while two replicas remain healthy.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosreceivereplicadegraded
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: two receive losses remove the write quorum
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-2:10902"}
+        values: 0x5
+      - series: up{job="thermoform-thanos-receive", instance="thanos-receive-3:10902"}
+        values: 1x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformThanosReceiveDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: thermoform-cae
+              component: remote-write
+              team: thermal-platform
+            exp_annotations:
+              summary: The Thanos Receive write quorum is unavailable
+              description: Fewer than two of three Receive ingesters are healthy, so RF=3 remote writes cannot reach quorum.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosreceivedown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: store gateway and object store failures expose historical risk
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-thanos-store", instance="thanos-store:10902"}
+        values: 0x5
+      - series: thanos_objstore_bucket_operation_failures_total{job="thermoform-thanos-store", operation="iter"}
+        values: 0 0 1 1 1 1
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformThanosStoreGatewayDown
+        exp_alerts:
+          - exp_labels:
+              instance: thanos-store:10902
+              job: thermoform-thanos-store
+              severity: warning
+              service: thermoform-cae
+              component: remote-query
+              team: thermal-platform
+            exp_annotations:
+              summary: The Thanos Store Gateway is unreachable
+              description: Real-time Receive queries continue, but historical blocks in the object-store path are unavailable to Query and Grafana.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosstoregatewaydown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+      - eval_time: 4m
+        alertname: ThermoformThanosObjectStoreFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: object-store
+              team: thermal-platform
+            exp_annotations:
+              summary: A Thanos object-store operation failed
+              description: Receive upload or Store Gateway access to the configured long-term block path failed during the last ten minutes.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosobjectstorefailure
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: failed and queued samples expose remote write degradation
+    interval: 1m
+    input_series:
+      - series: prometheus_remote_storage_samples_failed_total{remote_name="thanos-receive-a", instance="prometheus:9090"}
+        values: 0 0 1 1 1 1 1 1 1 1
+      - series: prometheus_remote_storage_samples_pending{remote_name="thanos-receive-b", instance="prometheus-2:9090"}
+        values: 11000x10
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ThermoformRemoteWriteFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: remote-write
+              team: thermal-platform
+            exp_annotations:
+              summary: Prometheus remote write is dropping samples
+              description: At least one replica reported failed samples for the Thanos Receive queue during the last ten minutes.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformremotewritefailure
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+      - eval_time: 6m
+        alertname: ThermoformRemoteWriteBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: remote-write
+              team: thermal-platform
+            exp_annotations:
+              summary: Prometheus remote-write queue is backlogged
+              description: A replica has held more than ten thousand pending Thanos Receive samples for five minutes.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformremotewritebackloghigh
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume

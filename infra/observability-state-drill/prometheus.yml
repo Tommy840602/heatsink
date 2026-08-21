@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+  external_labels:
+    cluster: thermoform-state-drill
+    replica: ${THERMOFORM_PROMETHEUS_REPLICA}
+
+alerting:
+  alert_relabel_configs:
+    - action: labeldrop
+      regex: replica
+  alertmanagers:
+    - static_configs:
+          - targets:
+            - alertmanager:9093
+            - alertmanager-2:9093
+
+remote_write:
+  - name: thanos-receive-a
+    url: http://thanos-receive:19291/api/v1/receive
+    queue_config:
+      capacity: 1000
+      min_shards: 1
+      max_shards: 2
+      max_samples_per_send: 500
+  - name: thanos-receive-b
+    url: http://thanos-receive-2:19291/api/v1/receive
+    queue_config:
+      capacity: 1000
+      min_shards: 1
+      max_shards: 2
+      max_samples_per_send: 500
+
+scrape_configs:
+  - job_name: thermoform-prometheus
+    static_configs:
+      - targets:
+          - prometheus:9090
+          - prometheus-2:9090
+
+  - job_name: thermoform-thanos-receive
+    static_configs:
+      - targets:
+          - thanos-receive:10902
+          - thanos-receive-2:10902
+          - thanos-receive-3:10902
+
+  - job_name: thermoform-thanos-store
+    static_configs:
+      - targets:
+          - thanos-store:10902

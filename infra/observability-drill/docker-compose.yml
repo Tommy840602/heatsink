@@ -1,0 +1,252 @@
+services:
+  metrics-fixture:
+    image: python:3.12-alpine
+    command: python /app/metrics_server.py
+    volumes:
+      - ./metrics_server.py:/app/metrics_server.py:ro
+    ports:
+      - "127.0.0.1:19096:8000"
+
+  receiver-fixture:
+    image: python:3.12-alpine
+    command: python /app/receiver_server.py
+    environment:
+      EXPECTED_AUTHORIZATION: Bearer drill-token-not-a-secret
+    volumes:
+      - ./receiver_server.py:/app/receiver_server.py:ro
+    ports:
+      - "127.0.0.1:19094:8080"
+
+  prometheus:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=64MB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ../prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ../prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ../prometheus/ha.yml:/etc/prometheus/ha.yml:ro
+      - ./watchdog-missing.yml:/etc/prometheus/watchdog-missing.yml:ro
+    ports:
+      - "127.0.0.1:19090:9090"
+    depends_on:
+      - metrics-fixture
+      - alertmanager
+      - alertmanager-2
+      - thanos-receive
+
+  prometheus-2:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=64MB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ../prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ../prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ../prometheus/ha.yml:/etc/prometheus/ha.yml:ro
+      - ./watchdog-missing.yml:/etc/prometheus/watchdog-missing.yml:ro
+    ports:
+      - "127.0.0.1:19091:9090"
+    depends_on:
+      - metrics-fixture
+      - alertmanager
+      - alertmanager-2
+      - thanos-receive
+
+  thanos-receive-init:
+    image: alpine:3.22
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store
+    volumes:
+      - thanos-receive-data:/thanos/receive-1
+      - thanos-receive-2-data:/thanos/receive-2
+      - thanos-receive-3-data:/thanos/receive-3
+      - thanos-object-store-data:/thanos/object-store
+      - thanos-store-data:/thanos/store
+
+  thanos-receive:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=7d
+      - --tsdb.max-retention-bytes=128MB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform-drill"
+      - --label=receive_replica="receive-1"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ../thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ../thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "127.0.0.1:19098:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-receive-2:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=7d
+      - --tsdb.max-retention-bytes=128MB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive-2:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform-drill"
+      - --label=receive_replica="receive-2"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ../thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ../thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-2-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "127.0.0.1:19110:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-receive-3:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=7d
+      - --tsdb.max-retention-bytes=128MB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive-3:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform-drill"
+      - --label=receive_replica="receive-3"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ../thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ../thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-3-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "127.0.0.1:19111:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-store:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - store
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --data-dir=/thanos/store
+      - --objstore.config-file=/etc/thanos/object-store.yml
+      - --sync-block-duration=5s
+    volumes:
+      - ../thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-object-store-data:/thanos/object-store:ro
+      - thanos-store-data:/thanos/store
+    ports:
+      - "127.0.0.1:19112:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-query:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - query
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --endpoint.sd-config-file=/etc/thanos/query-endpoints.yml
+      - --query.replica-label=replica
+      - --query.replica-label=receive_replica
+    volumes:
+      - ../thanos/query-endpoints.yml:/etc/thanos/query-endpoints.yml:ro
+    ports:
+      - "127.0.0.1:19097:10902"
+    depends_on:
+      - thanos-receive
+      - thanos-receive-2
+      - thanos-receive-3
+      - thanos-store
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_DRILL_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-2:9094
+      - --cluster.peer-name=alertmanager-1
+      - --cluster.label=thermoform-drill
+    volumes:
+      - ${THERMOFORM_DRILL_ALERTMANAGER_CONFIG:-../alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_DRILL_SECRET_DIR:-../alertmanager/secrets}:/run/secrets:ro
+    ports:
+      - "127.0.0.1:19093:9093"
+    depends_on:
+      - receiver-fixture
+
+  alertmanager-2:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_DRILL_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+      - --cluster.peer-name=alertmanager-2
+      - --cluster.label=thermoform-drill
+    volumes:
+      - ${THERMOFORM_DRILL_ALERTMANAGER_CONFIG:-../alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_DRILL_SECRET_DIR:-../alertmanager/secrets}:/run/secrets:ro
+    ports:
+      - "127.0.0.1:19095:9093"
+    depends_on:
+      - receiver-fixture
+
+volumes:
+  thanos-receive-data:
+  thanos-receive-2-data:
+  thanos-receive-3-data:
+  thanos-object-store-data:
+  thanos-store-data:

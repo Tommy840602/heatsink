@@ -1,0 +1,72 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: operations-webhook
+  group_by:
+    - service
+    - component
+    - severity
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: local-delivery-fallback
+      matchers:
+        - component="alert-delivery"
+    - receiver: critical-operations-webhook
+      matchers:
+        - severity="critical"
+      repeat_interval: 1h
+    - receiver: warning-operations-webhook
+      matchers:
+        - severity="warning"
+      repeat_interval: 4h
+
+receivers:
+  - name: local-delivery-fallback
+  - name: operations-webhook
+    webhook_configs:
+      - url: "https://alerts.example.com/v1/thermoform"
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+  - name: critical-operations-webhook
+    webhook_configs:
+      - url: "https://alerts.example.com/v1/thermoform"
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+  - name: warning-operations-webhook
+    webhook_configs:
+      - url: "https://alerts.example.com/v1/thermoform"
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="ThermoformCaeApiDown"
+    target_matchers:
+      - service="thermoform-cae"
+      - alertname!="ThermoformCaeApiDown"
+    equal:
+      - instance
+  - source_matchers:
+      - alertname="ThermoformCaeWatchdogMissing"
+    target_matchers:
+      - alertname="ThermoformCaeWatchdogStale"
+    equal:
+      - instance

@@ -1,0 +1,356 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      THERMOFORM_ENV: development
+      THERMOFORM_CORS_ORIGINS: http://localhost:3000
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+      THERMOFORM_HEARTBEAT_STALE_SECONDS: 120
+      THERMOFORM_WATCHDOG_STALE_SECONDS: 180
+    volumes:
+      - thermoform-artifacts:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build: ./backend
+    command: rq worker --url redis://redis:6379/0 thermoform
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+    volumes:
+      - thermoform-artifacts:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  watchdog:
+    build: ./backend
+    command: rq cron app.cron_config --url redis://redis:6379/0
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+      THERMOFORM_WATCHDOG_INTERVAL_SECONDS: 60
+      THERMOFORM_WATCHDOG_GRACE_SECONDS: 900
+    volumes:
+      - thermoform-artifacts:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=8GB
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ./infra/prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ./infra/prometheus/ha.yml:/etc/prometheus/ha.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+      alertmanager-2:
+        condition: service_started
+      thanos-receive:
+        condition: service_started
+
+  prometheus-2:
+    image: prom/prometheus:v3.5.5
+    environment:
+      THERMOFORM_PROMETHEUS_REPLICA: prometheus-2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=8GB
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ./infra/prometheus/storage.yml:/etc/prometheus/storage.yml:ro
+      - ./infra/prometheus/ha.yml:/etc/prometheus/ha.yml:ro
+      - prometheus-2-data:/prometheus
+    ports:
+      - "9091:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+      alertmanager-2:
+        condition: service_started
+      thanos-receive:
+        condition: service_started
+
+  thanos-receive-init:
+    image: alpine:3.22
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store
+    volumes:
+      - thanos-receive-data:/thanos/receive-1
+      - thanos-receive-2-data:/thanos/receive-2
+      - thanos-receive-3-data:/thanos/receive-3
+      - thanos-object-store-data:/thanos/object-store
+      - thanos-store-data:/thanos/store
+
+  thanos-receive:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=30d
+      - --tsdb.max-retention-bytes=16GB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform"
+      - --label=receive_replica="receive-1"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "10909:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-receive-2:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=30d
+      - --tsdb.max-retention-bytes=16GB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive-2:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform"
+      - --label=receive_replica="receive-2"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-2-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "10910:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-receive-3:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - receive
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --remote-write.address=0.0.0.0:19291
+      - --tsdb.path=/thanos/receive
+      - --tsdb.retention=30d
+      - --tsdb.max-retention-bytes=16GB
+      - --tsdb.wal-compression
+      - --receive.replication-factor=3
+      - --receive.hashrings-algorithm=ketama
+      - --receive.local-endpoint=thanos-receive-3:10901
+      - --receive.hashrings-file=/etc/thanos/hashring.json
+      - --label=receive_cluster="thermoform"
+      - --label=receive_replica="receive-3"
+      - --objstore.config-file=/etc/thanos/object-store.yml
+    volumes:
+      - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
+      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-receive-3-data:/thanos/receive
+      - thanos-object-store-data:/thanos/object-store
+    ports:
+      - "10911:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-store:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - store
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --data-dir=/thanos/store
+      - --objstore.config-file=/etc/thanos/object-store.yml
+      - --sync-block-duration=5m
+    volumes:
+      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-object-store-data:/thanos/object-store:ro
+      - thanos-store-data:/thanos/store
+    ports:
+      - "10912:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-query:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - query
+      - --http-address=0.0.0.0:10902
+      - --grpc-address=0.0.0.0:10901
+      - --endpoint.sd-config-file=/etc/thanos/query-endpoints.yml
+      - --query.replica-label=replica
+      - --query.replica-label=receive_replica
+    volumes:
+      - ./infra/thanos/query-endpoints.yml:/etc/thanos/query-endpoints.yml:ro
+    ports:
+      - "10902:10902"
+    depends_on:
+      - thanos-receive
+      - thanos-receive-2
+      - thanos-receive-3
+      - thanos-store
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_ALERT_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-2:9094
+      - --cluster.peer-name=alertmanager-1
+      - --cluster.label=thermoform
+    volumes:
+      - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+
+  alertmanager-2:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_ALERT_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+      - --cluster.peer-name=alertmanager-2
+      - --cluster.label=thermoform
+    volumes:
+      - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro
+      - alertmanager-2-data:/alertmanager
+    ports:
+      - "9095:9093"
+
+  grafana:
+    image: grafana/grafana:12.4.8
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: thermoform
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - thanos-query
+
+  cae-worker:
+    profiles: ["cae"]
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.openfoam
+    command: rq worker --url redis://redis:6379/0 --name openfoam-v2312-worker thermoform-cae
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+    volumes:
+      - thermoform-artifacts:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/openfoam-worker", "/usr/bin/openfoam2312", "-show-api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  thermoform-artifacts:
+  prometheus-data:
+  prometheus-2-data:
+  grafana-data:
+  alertmanager-data:
+  alertmanager-2-data:
+  thanos-receive-data:
+  thanos-receive-2-data:
+  thanos-receive-3-data:
+  thanos-object-store-data:
+  thanos-store-data:

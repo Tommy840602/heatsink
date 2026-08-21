@@ -1,0 +1,78 @@
+rule_files:
+  - ../storage.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: storage budget combines blocks wal and head chunks
+    interval: 1m
+    input_series:
+      - series: prometheus_tsdb_storage_blocks_bytes{job="thermoform-prometheus", instance="localhost:9090"}
+        values: 500x20
+      - series: prometheus_tsdb_wal_storage_size_bytes{job="thermoform-prometheus", instance="localhost:9090"}
+        values: 200x20
+      - series: prometheus_tsdb_head_chunks_storage_size_bytes{job="thermoform-prometheus", instance="localhost:9090"}
+        values: 150x20
+      - series: prometheus_tsdb_retention_limit_bytes{job="thermoform-prometheus", instance="localhost:9090"}
+        values: 1000x20
+    promql_expr_test:
+      - expr: thermoform_observability:prometheus_storage_usage:ratio
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="thermoform_observability:prometheus_storage_usage:ratio", instance="localhost:9090", job="thermoform-prometheus"}'
+            value: 0.85
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ThermoformPrometheusStorageBudgetHigh
+        exp_alerts:
+          - exp_labels:
+              instance: localhost:9090
+              job: thermoform-prometheus
+              severity: warning
+              service: thermoform-cae
+              component: observability-storage
+              team: thermal-platform
+            exp_annotations:
+              summary: Prometheus storage is approaching its retention budget
+              description: TSDB blocks, WAL, and head chunks have exceeded 80% of the configured size-retention limit for fifteen minutes.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformprometheusstoragebudgethigh
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: zero retention limit and persistence errors are actionable
+    interval: 1m
+    input_series:
+      - series: prometheus_tsdb_retention_limit_bytes{job="thermoform-prometheus", instance="localhost:9090"}
+        values: 0x20
+      - series: alertmanager_silences_maintenance_errors_total{job="thermoform-alertmanager", instance="alertmanager:9093"}
+        values: 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+      - series: alertmanager_nflog_maintenance_errors_total{job="thermoform-alertmanager", instance="alertmanager:9093"}
+        values: 0x20
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ThermoformPrometheusRetentionNotConfigured
+        exp_alerts:
+          - exp_labels:
+              instance: localhost:9090
+              job: thermoform-prometheus
+              severity: critical
+              service: thermoform-cae
+              component: observability-storage
+              team: thermal-platform
+            exp_annotations:
+              summary: Prometheus size retention is disabled
+              description: The running Prometheus instance reports no TSDB size-retention limit, removing the storage headroom contract.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformprometheusretentionnotconfigured
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+      - eval_time: 5m
+        alertname: ThermoformAlertmanagerPersistenceFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: observability-storage
+              team: thermal-platform
+            exp_annotations:
+              summary: Alertmanager failed to maintain durable state
+              description: Silence or notification-log maintenance reported an error in the last ten minutes; restart and deduplication state may be at risk.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerpersistencefailure
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume

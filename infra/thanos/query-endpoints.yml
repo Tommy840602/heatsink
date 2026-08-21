@@ -1,0 +1,5 @@
+endpoints:
+  - address: thanos-receive:10901
+  - address: thanos-receive-2:10901
+  - address: thanos-receive-3:10901
+  - address: thanos-store:10901
