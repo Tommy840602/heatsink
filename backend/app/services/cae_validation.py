@@ -42,7 +42,7 @@ def validate_cae_run(
     )
 
     residual_matches = re.findall(
-        rf"Solving for\s+([^,]+),\s+Initial residual\s*=\s*({FLOAT}),\s+Final residual\s*=\s*({FLOAT})",
+        rf"Solving for[ \t]+([^,\r\n]+),[ \t]+Initial residual[ \t]*=[ \t]*({FLOAT}),[ \t]+Final residual[ \t]*=[ \t]*({FLOAT})",
         solver_log,
         flags=re.IGNORECASE,
     )

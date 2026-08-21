@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import joblib
-
 
 class ArtifactRepository:
     def __init__(self, root: str | Path | None = None):
@@ -32,6 +30,8 @@ class ArtifactRepository:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def save_model(self, model_id: str, bundle: dict[str, Any], metadata: dict[str, Any]) -> None:
+        import joblib
+
         directory = self.root / "models" / model_id
         directory.mkdir(parents=True, exist_ok=True)
         model_path = directory / "bundle.joblib"
@@ -41,6 +41,8 @@ class ArtifactRepository:
             metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
 
     def load_model(self, model_id: str) -> dict[str, Any]:
+        import joblib
+
         path = self.root / "models" / model_id / "bundle.joblib"
         if not path.exists():
             raise FileNotFoundError(model_id)

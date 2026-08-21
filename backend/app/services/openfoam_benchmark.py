@@ -28,6 +28,20 @@ def _tutorial_path() -> Path | None:
     return path if path.is_dir() else None
 
 
+def _openfoam_version() -> tuple[str | None, bool]:
+    configured = os.getenv("WM_PROJECT_VERSION")
+    if configured:
+        return configured, True
+    launcher = shutil.which("openfoam2312")
+    if launcher is None:
+        return None, False
+    completed = subprocess.run(
+        [launcher, "-show-api"], capture_output=True, text=True, check=False, timeout=30
+    )
+    version = (completed.stdout + completed.stderr).strip()
+    return version or None, completed.returncode == 0
+
+
 def _collect_logs(case_root: Path, process_output: str) -> tuple[str, str]:
     mesh_parts = [process_output]
     solver_parts = [process_output]
@@ -54,7 +68,7 @@ def run_openfoam_benchmark(
     }
     benchmark_id = repository.version(fingerprint, "benchmark")
     source = _tutorial_path()
-    required = ["foamVersion", "blockMesh", "checkMesh", "chtMultiRegionFoam"]
+    required = ["blockMesh", "checkMesh", "chtMultiRegionFoam"]
     missing_commands = [command for command in required if shutil.which(command) is None]
 
     if source is None or missing_commands:
@@ -79,11 +93,8 @@ def run_openfoam_benchmark(
         repository.save_cae_artifact(benchmark_id, "report.json", json.dumps(result, indent=2, sort_keys=True))
         return result
 
-    version_result = subprocess.run(
-        ["foamVersion"], capture_output=True, text=True, check=False, timeout=30
-    )
-    openfoam_version = (version_result.stdout + version_result.stderr).strip()
-    if version_result.returncode != 0 or "2312" not in openfoam_version:
+    openfoam_version, version_detected = _openfoam_version()
+    if not version_detected or "2312" not in (openfoam_version or ""):
         validation = validate_cae_run("", "", request.criteria)
         result = {
             "benchmark_id": benchmark_id,

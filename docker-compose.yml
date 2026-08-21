@@ -58,7 +58,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/usr/local/bin/openfoam-worker", "foamVersion"]
+      test: ["CMD", "/usr/local/bin/openfoam-worker", "/usr/bin/openfoam2312", "-show-api"]
       interval: 30s
       timeout: 10s
       retries: 3

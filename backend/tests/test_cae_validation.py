@@ -40,3 +40,17 @@ def test_cae_acceptance_rejects_missing_energy_and_response_metrics():
     assert report["gates"]["energy_balance"]["passed"] is False
     assert report["gates"]["response_metrics"]["passed"] is False
     assert report["acceptance_passed"] is False
+
+
+def test_residual_field_names_do_not_capture_region_prefix_lines():
+    solver_log = """
+fluid region topAir
+GAMG:  Solving for p_rgh, Initial residual = 8.1e-5, Final residual = 3.5e-7, No Iterations 2
+solid region heater
+DICPCG:  Solving for h, Initial residual = 5.3e-5, Final residual = 4.2e-9, No Iterations 1
+End
+"""
+
+    report = validate_cae_run(CHECK_MESH_OK, solver_log)
+
+    assert set(report["gates"]["convergence"]["latest_by_field"]) == {"p_rgh", "h"}

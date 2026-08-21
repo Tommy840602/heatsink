@@ -2,14 +2,7 @@ from typing import Any
 
 from rq import get_current_job
 
-from app.domain.cae import OpenFoamBenchmarkRequest, OpenFoamCaseRequest
-from app.domain.phase1 import Phase1WorkflowRequest
-from app.domain.phase2 import Phase2WorkflowRequest
 from app.repositories.artifacts import ArtifactRepository
-from app.services.openfoam import prepare_openfoam_case
-from app.services.openfoam_benchmark import run_openfoam_benchmark
-from app.services.phase2_workflow import run_phase2
-from app.services.workflow import run_phase1
 
 
 def _progress(value: int, stage: str) -> None:
@@ -25,21 +18,33 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
     repository = ArtifactRepository()
     _progress(5, "validating_input")
     if task == "phase1":
+        from app.domain.phase1 import Phase1WorkflowRequest
+        from app.services.workflow import run_phase1
+
         _progress(15, "doe_simulation_training_optimization")
         result = run_phase1(Phase1WorkflowRequest.model_validate(payload), repository)
         _progress(100, "completed")
         return result
     if task == "phase2":
+        from app.domain.phase2 import Phase2WorkflowRequest
+        from app.services.phase2_workflow import run_phase2
+
         _progress(15, "bayesian_learning_and_cad")
         result = run_phase2(Phase2WorkflowRequest.model_validate(payload), repository)
         _progress(100, "completed")
         return result
     if task == "cae":
+        from app.domain.cae import OpenFoamCaseRequest
+        from app.services.openfoam import prepare_openfoam_case
+
         _progress(25, "generating_cad_and_case")
         result = prepare_openfoam_case(OpenFoamCaseRequest.model_validate(payload), repository)
         _progress(100, "completed")
         return result
     if task == "cae_benchmark":
+        from app.domain.cae import OpenFoamBenchmarkRequest
+        from app.services.openfoam_benchmark import run_openfoam_benchmark
+
         _progress(15, "checking_openfoam_environment")
         result = run_openfoam_benchmark(OpenFoamBenchmarkRequest.model_validate(payload), repository)
         _progress(100, "completed")

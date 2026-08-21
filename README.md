@@ -127,7 +127,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - A tutorial benchmark passes only after successful execution, `Mesh OK`, mesh limits, an `End` marker, and converged final residuals. It still returns `results_available=false` because it is not the optimized heat-sink geometry.
 - A design result additionally requires standardized `THERMOFORM_METRIC` values for `t_max_c`, `pressure_drop_pa`, `heat_in_w`, and `heat_out_w`; the energy imbalance must remain within the configured limit.
 - `Dockerfile.openfoam` pins the official `2312.260127-2` runtime/common/tutorial packages and verifies all three repository SHA-256 values before installation. The image uses `linux/amd64`, matching the published OpenCFD Debian binaries; Apple Silicon Docker uses emulation for this worker.
-- The CAE worker entrypoint sources the packaged OpenFOAM environment, verifies `foamVersion`, checks the official tutorial directory, exports its resolved location, and exits before starting RQ if any capability is absent.
+- The CAE worker entrypoint sources the packaged OpenFOAM environment, verifies `WM_PROJECT_VERSION` (with `/usr/bin/openfoam2312 -show-api` as fallback), checks the official tutorial directory, exports its resolved location, and exits before starting RQ if any capability is absent.
+- The Compose CAE profile has been exercised end-to-end with the packaged v2312 `multiRegionHeater` tutorial: RQ completed the solver, `checkMesh -allRegions` passed, and convergence passed while result availability correctly remained false for this non-design benchmark.
 
 ## Verification
 
