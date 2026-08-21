@@ -1,0 +1,59 @@
+groups:
+  - name: thermoform-observability-storage
+    interval: 30s
+    rules:
+      - record: thermoform_observability:prometheus_storage_usage:ratio
+        expr: |
+          (
+            prometheus_tsdb_storage_blocks_bytes
+            + prometheus_tsdb_wal_storage_size_bytes
+            + prometheus_tsdb_head_chunks_storage_size_bytes
+          )
+          /
+          prometheus_tsdb_retention_limit_bytes
+
+      - alert: ThermoformPrometheusStorageBudgetHigh
+        expr: thermoform_observability:prometheus_storage_usage:ratio > 0.8
+        for: 15m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: observability-storage
+          team: thermal-platform
+        annotations:
+          summary: Prometheus storage is approaching its retention budget
+          description: TSDB blocks, WAL, and head chunks have exceeded 80% of the configured size-retention limit for fifteen minutes.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformprometheusstoragebudgethigh
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformPrometheusRetentionNotConfigured
+        expr: prometheus_tsdb_retention_limit_bytes == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: thermoform-cae
+          component: observability-storage
+          team: thermal-platform
+        annotations:
+          summary: Prometheus size retention is disabled
+          description: The running Prometheus instance reports no TSDB size-retention limit, removing the storage headroom contract.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformprometheusretentionnotconfigured
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerPersistenceFailure
+        expr: |
+          sum(increase(alertmanager_silences_maintenance_errors_total[10m]))
+          +
+          sum(increase(alertmanager_nflog_maintenance_errors_total[10m]))
+          > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: observability-storage
+          team: thermal-platform
+        annotations:
+          summary: Alertmanager failed to maintain durable state
+          description: Silence or notification-log maintenance reported an error in the last ten minutes; restart and deduplication state may be at risk.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerpersistencefailure
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume

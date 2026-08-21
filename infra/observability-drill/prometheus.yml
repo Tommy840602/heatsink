@@ -6,6 +6,7 @@ rule_files:
   - /etc/prometheus/alerts.yml
   - /etc/prometheus/slo.yml
   - /etc/prometheus/delivery.yml
+  - /etc/prometheus/storage.yml
   - /etc/prometheus/watchdog-missing.yml
 
 alerting:
@@ -15,6 +16,11 @@ alerting:
             - alertmanager:9093
 
 scrape_configs:
+  - job_name: thermoform-prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
   - job_name: thermoform-api
     metrics_path: /metrics
     static_configs:

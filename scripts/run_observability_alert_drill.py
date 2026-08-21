@@ -26,6 +26,7 @@ EXPECTED_GROUPS = {
     "thermoform-cae-slo-recording",
     "thermoform-cae-slo-alerts",
     "thermoform-alert-delivery",
+    "thermoform-observability-storage",
     "thermoform-cae-observability-drill",
 }
 

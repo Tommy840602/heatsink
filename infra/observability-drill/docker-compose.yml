@@ -20,11 +20,14 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=64MB
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ../prometheus/slo.yml:/etc/prometheus/slo.yml:ro
       - ../prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ../prometheus/storage.yml:/etc/prometheus/storage.yml:ro
       - ./watchdog-missing.yml:/etc/prometheus/watchdog-missing.yml:ro
     ports:
       - "127.0.0.1:19090:9090"

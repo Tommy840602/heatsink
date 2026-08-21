@@ -156,11 +156,43 @@
       ],
       "title": "Notification failures in the last hour",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.7 }, { "color": "red", "value": 0.8 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 29 },
+      "id": 12,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" },
+      "targets": [{ "expr": "thermoform_observability:prometheus_storage_usage:ratio", "refId": "A" }],
+      "title": "Prometheus retention budget used",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 18, "x": 6, "y": 29 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "sum(increase(alertmanager_silences_maintenance_errors_total[1h]))", "legendFormat": "silence maintenance", "refId": "A" },
+        { "expr": "sum(increase(alertmanager_nflog_maintenance_errors_total[1h]))", "legendFormat": "notification-log maintenance", "refId": "B" }
+      ],
+      "title": "Alertmanager state maintenance errors",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",
   "schemaVersion": 41,
-  "tags": ["thermoform", "cae", "resume", "slo", "error-budget"],
+  "tags": ["thermoform", "cae", "resume", "slo", "error-budget", "storage", "retention"],
   "templating": {
     "list": [
       {
@@ -177,5 +209,5 @@
   "timezone": "browser",
   "title": "CAE Resume Observability",
   "uid": "thermoform-cae-resume",
-  "version": 3
+  "version": 4
 }

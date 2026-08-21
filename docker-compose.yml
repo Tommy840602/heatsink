@@ -63,11 +63,14 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=8GB
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
       - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
+      - ./infra/prometheus/storage.yml:/etc/prometheus/storage.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -84,6 +87,7 @@ services:
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
+      - --data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}
     volumes:
       - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
       - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro

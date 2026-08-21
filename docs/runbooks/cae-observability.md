@@ -118,6 +118,43 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 4. Keep the `local-delivery-fallback` route available for delivery-component alerts while the external webhook is impaired.
 5. Resolve only after the failure counter stops increasing and an authenticated staging drill reaches the receiver.
 
+## ThermoformPrometheusStorageBudgetHigh
+
+**Impact:** Prometheus blocks, WAL, and head chunks exceed 80% of the configured size-retention limit. Compaction temporarily needs both source and destination blocks, so waiting for the host disk to fill risks failed writes or TSDB corruption.
+
+1. Check the storage-budget panel and break down `prometheus_tsdb_storage_blocks_bytes`, `prometheus_tsdb_wal_storage_size_bytes`, and `prometheus_tsdb_head_chunks_storage_size_bytes`.
+2. Confirm the active 30-day/8 GB retention contract through `/api/v1/status/flags` and `prometheus_tsdb_retention_limit_bytes`.
+3. Reduce unnecessary high-cardinality series or provision more local disk before increasing retention. Keep 15–20% compaction headroom.
+4. Take an offline backup before storage migration; never delete WAL or block directories merely to clear the alert.
+
+## ThermoformPrometheusRetentionNotConfigured
+
+**Impact:** the running Prometheus process reports no size limit, so the deployment no longer guarantees space for WAL and compaction headroom.
+
+1. Inspect the loaded Prometheus configuration, not only the repository file.
+2. Restore the Compose arguments `--storage.tsdb.retention.time=30d` and `--storage.tsdb.retention.size=8GB`, then restart Prometheus normally.
+3. Verify `prometheus_tsdb_retention_limit_bytes` becomes nonzero and the storage ratio recording rule returns data.
+
+## ThermoformAlertmanagerPersistenceFailure
+
+**Impact:** Alertmanager cannot reliably maintain its silence or notification-log snapshots. A restart could lose silences or cause duplicate notifications even if current webhook delivery still works.
+
+1. Inspect the silence and notification-log maintenance error counters separately and review Alertmanager storage logs.
+2. Check volume availability, permissions, free space, and whether `/alertmanager` is still backed by the expected Compose volume.
+3. Preserve the current volume and take an offline backup before repair. Do not clear `silences` or `nflog` files to suppress the alert.
+4. Run the state restore drill and verify a known silence survives before closing the incident.
+
+## Offline backup and restore
+
+The backup tool covers the `prometheus-data` and `alertmanager-data` volumes. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes.
+
+1. Identify the exact Compose project with `docker compose ls` and stop `prometheus` and `alertmanager` gracefully.
+2. Run `python scripts/observability_state.py backup --project-name <project> --output-dir <new-backup-directory>`.
+3. Start the services again immediately after backup and copy the backup directory to durable storage.
+4. For recovery, preserve or quarantine damaged volumes and let Compose create empty replacements with the same project labels. The tool never deletes or overwrites existing state.
+5. With the target services stopped, run `python scripts/observability_state.py restore --project-name <project> --input-dir <backup-directory> --confirm-empty-volumes`, then start the services.
+6. Verify Prometheus readiness and retention, Alertmanager silences, notification deduplication state, dashboards, and both scrape targets.
+
 ## External webhook deployment
 
 1. Store the bearer token outside Git as `thermoform_alert_webhook_token`, set its directory to `0750` and file to `0640`, and export its group ID through `THERMOFORM_ALERT_SECRET_GID` so the non-root container can read it.
@@ -128,7 +165,7 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## Recovery verification
 
-- Prometheus targets `thermoform-api` and `thermoform-alertmanager` are up and all eleven alert rules are loaded.
+- Prometheus targets `thermoform-prometheus`, `thermoform-api`, and `thermoform-alertmanager` are up and all fourteen alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.

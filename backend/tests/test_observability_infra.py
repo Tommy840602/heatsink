@@ -18,7 +18,9 @@ def test_prometheus_scrapes_fastapi_and_loads_cae_alerts():
     assert "/etc/prometheus/alerts.yml" in config
     assert "/etc/prometheus/slo.yml" in config
     assert "/etc/prometheus/delivery.yml" in config
+    assert "/etc/prometheus/storage.yml" in config
     assert "alertmanager:9093" in config
+    assert "job_name: thermoform-prometheus" in config
     assert "job_name: thermoform-alertmanager" in config
     assert "ThermoformCaeWatchdogMissing" in alerts
     assert "ThermoformCaeWatchdogStale" in alerts
@@ -38,7 +40,7 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 11
+    assert len(dashboard["panels"]) == 13
     expressions = {
         target["expr"]
         for panel in dashboard["panels"]
@@ -51,6 +53,8 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     )
     assert 'up{job="thermoform-alertmanager"}' in expressions
     assert any("alertmanager_notifications_failed_total" in item for item in expressions)
+    assert "thermoform_observability:prometheus_storage_usage:ratio" in expressions
+    assert any("silences_maintenance_errors_total" in item for item in expressions)
     assert "prometheus:" in compose
     assert "alertmanager:" in compose
     assert "grafana:" in compose
@@ -90,6 +94,9 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformCaeRecoverySliMissing",
         "ThermoformAlertmanagerDown",
         "ThermoformAlertDeliveryFailure",
+        "ThermoformPrometheusStorageBudgetHigh",
+        "ThermoformPrometheusRetentionNotConfigured",
+        "ThermoformAlertmanagerPersistenceFailure",
     ):
         assert f"## {alert}" in runbook
 
@@ -131,6 +138,49 @@ def test_alert_delivery_rules_use_native_alertmanager_metrics():
     assert "THERMOFORM_ALERT_SECRET_GID" in compose
 
 
+def test_observability_storage_retention_and_alerts_are_configured():
+    rules = ROOT.joinpath("infra/prometheus/storage.yml").read_text(
+        encoding="utf-8"
+    )
+    tests = ROOT.joinpath(
+        "infra/prometheus/tests/storage.test.yml"
+    ).read_text(encoding="utf-8")
+    compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "--storage.tsdb.retention.time=30d" in compose
+    assert "--storage.tsdb.retention.size=8GB" in compose
+    assert "prometheus_tsdb_retention_limit_bytes" in rules
+    assert "ThermoformPrometheusStorageBudgetHigh" in rules
+    assert "ThermoformPrometheusRetentionNotConfigured" in rules
+    assert "ThermoformAlertmanagerPersistenceFailure" in rules
+    assert "storage budget combines blocks wal and head chunks" in tests
+    assert "--data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}" in compose
+
+
+def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
+    tool = ROOT.joinpath("scripts/observability_state.py").read_text(
+        encoding="utf-8"
+    )
+    drill = ROOT.joinpath(
+        "scripts/run_observability_state_drill.py"
+    ).read_text(encoding="utf-8")
+    compose = ROOT.joinpath(
+        "infra/observability-state-drill/docker-compose.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'VOLUME_KEYS = ("prometheus-data", "alertmanager-data")' in tool
+    assert "com.docker.compose.project" in tool
+    assert "com.docker.compose.volume" in tool
+    assert "--confirm-empty-volumes" in tool
+    assert "is mounted by a running container" in tool
+    assert "is not empty; refusing to overwrite state" in tool
+    assert "validate_archive" in tool
+    assert "StateRestoreDrill" in drill
+    assert '"down", "--volumes", "--remove-orphans"' in drill
+    assert "prometheus-data:" in compose
+    assert "alertmanager-data:" in compose
+
+
 def test_observability_drill_is_isolated_and_checks_the_warning_route():
     compose = ROOT.joinpath(
         "infra/observability-drill/docker-compose.yml"
@@ -167,8 +217,10 @@ def test_ci_validates_every_observability_configuration():
     assert "check config /etc/prometheus/prometheus.yml" in workflow
     assert "test rules /etc/prometheus/tests/slo.test.yml" in workflow
     assert "test rules /etc/prometheus/tests/delivery.test.yml" in workflow
+    assert "test rules /etc/prometheus/tests/storage.test.yml" in workflow
     assert "amtool" in workflow
     assert "check-config /etc/alertmanager/alertmanager.yml" in workflow
     assert "python -m json.tool" in workflow
     assert "python scripts/run_observability_alert_drill.py" in workflow
     assert "python scripts/render_alertmanager_runtime.py" in workflow
+    assert "python scripts/run_observability_state_drill.py" in workflow
