@@ -8,6 +8,7 @@ from app.api import cae as cae_api
 from app.main import app
 from app.repositories.artifacts import ArtifactRepository
 from app.services.cae_history import list_resume_dispatches, list_resume_events
+from app.services.cae_heartbeat import write_resume_heartbeat
 from app.services.cae_reconciliation import reconcile_resume_attempts
 from app.services.jobs import get_job_queue
 
@@ -201,6 +202,62 @@ def test_active_rq_job_remains_unchanged(tmp_path):
     assert [event["status"] for event in list_resume_events(repository, attempt_id)] == [
         "queued"
     ]
+
+
+def test_fresh_durable_heartbeat_protects_missing_rq_job(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    attempt_id, _job_id = _save_attempt(
+        repository,
+        "000000000017",
+        generated_at="2026-08-20T00:00:00+00:00",
+    )
+    heartbeat = write_resume_heartbeat(
+        repository,
+        attempt_id,
+        stage="campaign_execution",
+        heartbeat_interval_seconds=30,
+    )
+    now = datetime.fromisoformat(heartbeat["heartbeat_at"]) + timedelta(
+        seconds=899
+    )
+
+    result = reconcile_resume_attempts(
+        repository,
+        SnapshotQueue(),
+        stale_after_seconds=900,
+        now=now,
+    )
+    expired = reconcile_resume_attempts(
+        repository,
+        SnapshotQueue(),
+        stale_after_seconds=900,
+        now=datetime.fromisoformat(heartbeat["heartbeat_at"])
+        + timedelta(seconds=901),
+    )
+
+    assert result["pending_grace"] == 1
+    assert result["attempts"][0]["heartbeat_available"] is True
+    assert expired["reconciled"] == 1
+    assert expired["attempts"][0]["reason"] == "orphaned_job_missing"
+    assert list_resume_events(repository, attempt_id)[-1]["status"] == "failed"
+
+
+def test_terminal_heartbeat_repairs_missing_event_immediately(tmp_path):
+    repository = ArtifactRepository(tmp_path)
+    attempt_id, _job_id = _save_attempt(repository, "000000000018")
+    write_resume_heartbeat(
+        repository,
+        attempt_id,
+        stage="failed",
+        active=False,
+        error="worker terminated",
+    )
+
+    result = reconcile_resume_attempts(repository, SnapshotQueue())
+
+    assert result["reconciled"] == 1
+    assert result["attempts"][0]["reason"] == "heartbeat_terminal_failed"
+    assert list_resume_events(repository, attempt_id)[-1]["status"] == "failed"
 
 
 def test_successor_report_repairs_event_without_consulting_expired_job(tmp_path):

@@ -83,6 +83,7 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
         return result
     if task == "cae_campaign":
         from app.domain.cae import OpenFoamCampaignRequest
+        from app.services.cae_heartbeat import ResumeAttemptHeartbeat
         from app.services.cae_resume import (
             RESUME_ATTEMPT_PATTERN,
             record_resume_event,
@@ -111,8 +112,9 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
                     error=str(exc)[:500],
                 )
             raise
+        job = get_current_job()
+        heartbeat = None
         if resume_attempt_id:
-            job = get_current_job()
             record_resume_event(
                 repository,
                 resume_attempt_id,
@@ -123,47 +125,86 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
                 root_resume_attempt_id=request.root_resume_attempt_id,
                 retry_index=request.retry_index,
             )
+            heartbeat = ResumeAttemptHeartbeat(
+                repository,
+                resume_attempt_id,
+                job_id=job.id if job else None,
+            )
+            heartbeat.start(
+                "preparing_checkpoint_campaign",
+                parent_campaign_id=request.parent_campaign_id,
+                retry_index=request.retry_index,
+            )
 
         def campaign_progress(current: int, total: int, stage: str) -> None:
             value = min(95, 10 + round(85 * current / max(total, 1)))
             _progress(value, f"{stage}_{current}_of_{total}")
+            if heartbeat:
+                heartbeat.update(
+                    stage,
+                    segment_current=current,
+                    segment_total=total,
+                    progress=value,
+                )
 
         _progress(10, "preparing_checkpoint_campaign")
         try:
-            result = run_openfoam_campaign(
-                request,
-                repository,
-                progress_callback=campaign_progress,
-                should_cancel=_cancel_requested,
+            try:
+                result = run_openfoam_campaign(
+                    request,
+                    repository,
+                    progress_callback=campaign_progress,
+                    should_cancel=_cancel_requested,
+                )
+            except Exception as exc:
+                if heartbeat:
+                    heartbeat.update(
+                        "failed",
+                        active=False,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                    )
+                if resume_attempt_id:
+                    record_resume_event(
+                        repository,
+                        resume_attempt_id,
+                        "failed",
+                        stage="campaign_execution",
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:500],
+                    )
+                raise
+            terminal_status = (
+                "cancelled"
+                if result["status"] == "cancelled"
+                else "failed"
+                if result["status"] == "failed"
+                else "completed"
             )
-        except Exception as exc:
+            if heartbeat:
+                heartbeat.update(
+                    terminal_status,
+                    active=False,
+                    successor_campaign_id=result.get("campaign_id"),
+                    stop_reason=result.get("stop_reason"),
+                )
             if resume_attempt_id:
                 record_resume_event(
                     repository,
                     resume_attempt_id,
-                    "failed",
-                    stage="campaign_execution",
-                    error_type=type(exc).__name__,
-                    error=str(exc)[:500],
+                    terminal_status,
+                    successor_campaign_id=result.get("campaign_id"),
+                    stop_reason=result.get("stop_reason"),
+                    results_available=bool(result.get("results_available")),
                 )
-            raise
-        if resume_attempt_id:
-            terminal_status = (
-                "cancelled" if result["status"] == "cancelled" else "completed"
-            )
-            record_resume_event(
-                repository,
-                resume_attempt_id,
+            _progress(
+                100 if result["status"] != "cancelled" else 99,
                 terminal_status,
-                successor_campaign_id=result.get("campaign_id"),
-                stop_reason=result.get("stop_reason"),
-                results_available=bool(result.get("results_available")),
             )
-        _progress(
-            100 if result["status"] != "cancelled" else 99,
-            "cancelled" if result["status"] == "cancelled" else "completed",
-        )
-        return result
+            return result
+        finally:
+            if heartbeat:
+                heartbeat.close()
     if task == "cae_mesh_study":
         from app.domain.cae import OpenFoamMeshIndependenceRequest
         from app.services.openfoam_mesh_study import evaluate_mesh_independence

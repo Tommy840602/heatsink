@@ -160,6 +160,7 @@ export const api = {
       `/cae/resume-attempts/reconcile?limit=${limit}&stale_after_seconds=${staleAfterSeconds}`,
       { method: "POST" },
     ),
+  getCaeResumeWatchdog: () => request("/cae/resume-watchdog"),
   retryCaeResumeAttempt: (attemptId) =>
     request(`/cae/resume-attempts/${attemptId}/retry`, {
       method: "POST",

@@ -13,6 +13,7 @@ from app.services.cae_history import (
     list_campaign_reports,
     list_mesh_study_reports,
     list_resume_dispatches,
+    load_latest_resume_watchdog,
     load_campaign_report,
     load_mesh_study_report,
 )
@@ -88,6 +89,11 @@ def reconcile_attempts(
         )
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
+
+
+@router.get("/cae/resume-watchdog")
+def resume_watchdog() -> dict[str, Any]:
+    return {"watchdog": load_latest_resume_watchdog(repository)}
 
 
 @router.get("/cae/campaigns/{campaign_id}")

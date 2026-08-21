@@ -42,6 +42,18 @@ services:
       redis:
         condition: service_healthy
 
+  watchdog:
+    build: ./backend
+    command: rq cron app.cron_config --url redis://redis:6379/0
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+      THERMOFORM_WATCHDOG_INTERVAL_SECONDS: 60
+      THERMOFORM_WATCHDOG_GRACE_SECONDS: 900
+    depends_on:
+      redis:
+        condition: service_healthy
+
   cae-worker:
     profiles: ["cae"]
     platform: linux/amd64

@@ -9,6 +9,7 @@ from app.repositories.artifacts import ArtifactRepository
 CAMPAIGN_PATTERN = re.compile(r"^campaign_[0-9a-f]{12}$")
 MESH_STUDY_PATTERN = re.compile(r"^meshstudy_[0-9a-f]{12}$")
 RESUME_ATTEMPT_PATTERN = re.compile(r"^resume_[0-9a-f]{12}$")
+WATCHDOG_PATTERN = re.compile(r"^watchdog_[0-9a-f]{12}$")
 RESUME_EVENT_ORDER = {
     "queued": 0,
     "started": 1,
@@ -214,3 +215,24 @@ def list_resume_dispatches(
         _resume_dispatch_summary(report, repository)
         for report in _newest_first(reports)[:limit]
     ]
+
+
+def list_resume_watchdog_reports(
+    repository: ArtifactRepository, limit: int = 20
+) -> list[dict[str, Any]]:
+    reports = [
+        report
+        for path in repository.list_cae_report_paths(
+            "resume-watchdog-report.json", "watchdog_"
+        )
+        if (report := _read_report(path)) is not None
+        and WATCHDOG_PATTERN.fullmatch(str(report.get("watchdog_id") or ""))
+    ]
+    return _newest_first(reports)[:limit]
+
+
+def load_latest_resume_watchdog(
+    repository: ArtifactRepository,
+) -> dict[str, Any] | None:
+    reports = list_resume_watchdog_reports(repository, 1)
+    return reports[0] if reports else None

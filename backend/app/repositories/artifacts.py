@@ -84,6 +84,20 @@ class ArtifactRepository:
             pass
         return path
 
+    def replace_cae_artifact(
+        self, case_id: str, filename: str, content: str | bytes
+    ) -> Path:
+        if Path(filename).name != filename:
+            raise ValueError("CAE artifact filename must not contain a path")
+        directory = self.root / "cae" / case_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+        temporary = directory / f".{filename}.tmp"
+        encoded = content if isinstance(content, bytes) else content.encode("utf-8")
+        temporary.write_bytes(encoded)
+        temporary.replace(path)
+        return path
+
     def cae_artifact_write_path(self, case_id: str, filename: str) -> Path:
         if Path(filename).name != filename:
             raise ValueError("CAE artifact filename must not contain a path")

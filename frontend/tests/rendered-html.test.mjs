@@ -74,7 +74,9 @@ test("CAE Operations wires resumable campaigns to the publication gate", async (
   assert.match(page, /Resume lineage/i);
   assert.match(page, /api\s*\.\s*listCaeResumeAttempts/);
   assert.match(page, /api\s*\.\s*reconcileCaeResumeAttempts/);
+  assert.match(page, /api\s*\.\s*getCaeResumeWatchdog/);
   assert.match(page, /RQ RECONCILIATION/);
+  assert.match(page, /SERVER WATCHDOG/);
   assert.match(page, /api\s*\.\s*retryCaeResumeAttempt/);
   assert.match(page, /Attempt lifecycle/i);
   assert.match(page, /Retry failed attempt/);
@@ -89,11 +91,13 @@ test("CAE Operations wires resumable campaigns to the publication gate", async (
   assert.match(apiClient, /`\/cae\/campaigns\/\$\{campaignId\}\/resume`/);
   assert.match(apiClient, /`\/cae\/resume-attempts\?limit=\$\{limit\}`/);
   assert.match(apiClient, /\/cae\/resume-attempts\/reconcile\?limit=/);
+  assert.match(apiClient, /request\("\/cae\/resume-watchdog"\)/);
   assert.match(apiClient, /`\/cae\/resume-attempts\/\$\{attemptId\}\/retry`/);
   assert.doesNotMatch(apiClient, /startCaeResume/);
   assert.match(styles, /\.checkpoint-timeline/);
   assert.match(styles, /\.publication-gate/);
   assert.match(styles, /\.resume-event-trail/);
   assert.match(styles, /\.resume-reconciliation-status/);
+  assert.match(styles, /\.resume-watchdog-status/);
   assert.match(styles, /\.retry-resume-action/);
 });

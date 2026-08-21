@@ -16,6 +16,7 @@ from app.services.cae_resume import (
     validate_issued_resume_request,
 )
 from app.services.cae_history import list_resume_events
+from app.services.cae_heartbeat import load_resume_heartbeat
 from app.services.jobs import CAE_QUEUE_NAME, get_job_queue
 from app.services import job_tasks, openfoam_campaign
 from app.services.openfoam_campaign import expected_campaign_case_id
@@ -389,6 +390,45 @@ def test_resume_worker_records_started_and_completed_events(tmp_path, monkeypatc
         "started",
         "completed",
     ]
+    heartbeat = load_resume_heartbeat(repository, queued["resume_attempt_id"])
+    assert heartbeat is not None
+    assert heartbeat["stage"] == "completed"
+    assert heartbeat["active"] is False
+
+
+def test_resume_worker_records_failed_campaign_result(tmp_path, monkeypatch):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+    queued = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+    payload = queue.calls[0][1]
+    successor_id = queued["lineage"]["successor_campaign_id"]
+    monkeypatch.setattr(job_tasks, "ArtifactRepository", lambda: repository)
+    monkeypatch.setattr(
+        openfoam_campaign,
+        "run_openfoam_campaign",
+        lambda *_args, **_kwargs: {
+            "campaign_id": successor_id,
+            "status": "failed",
+            "stop_reason": "segment_failed",
+            "results_available": False,
+        },
+    )
+
+    result = job_tasks.execute_job("cae_campaign", payload)
+
+    assert result["status"] == "failed"
+    events = list_resume_events(repository, queued["resume_attempt_id"])
+    assert [event["status"] for event in events] == [
+        "queued",
+        "started",
+        "failed",
+    ]
+    heartbeat = load_resume_heartbeat(repository, queued["resume_attempt_id"])
+    assert heartbeat is not None
+    assert heartbeat["stage"] == "failed"
+    assert heartbeat["active"] is False
 
 
 def test_resume_preview_api_returns_preflight_and_404(tmp_path, monkeypatch):

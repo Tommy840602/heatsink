@@ -1,17 +1,21 @@
+import json
+import os
 from datetime import UTC, datetime
 from typing import Any
 
 from rq.exceptions import NoSuchJobError
 
 from app.repositories.artifacts import ArtifactRepository
+from app.services.cae_heartbeat import load_resume_heartbeat
 from app.services.cae_history import list_resume_dispatches, list_resume_events
 from app.services.cae_resume import record_resume_event
-from app.services.jobs import JobQueue
+from app.services.jobs import JobQueue, RqJobQueue
 
 
 TERMINAL_EVENT_STATUSES = {"failed", "completed", "cancelled"}
 ACTIVE_JOB_STATUSES = {"queued", "deferred", "scheduled", "started"}
 ORPHAN_RUNTIME_BUFFER_SECONDS = 300
+WATCHDOG_REPORT_FILENAME = "resume-watchdog-report.json"
 
 
 def _age_seconds(value: Any, now: datetime) -> float | None:
@@ -51,6 +55,31 @@ def _terminal_event_for_successor(
     if status == "failed":
         return "failed", "successor_report_failed"
     return "completed", "successor_report_available"
+
+
+def _terminal_event_for_heartbeat(
+    heartbeat: dict[str, Any] | None,
+) -> tuple[str, str] | None:
+    if not heartbeat or heartbeat.get("active") is not False:
+        return None
+    stage = str(heartbeat.get("stage") or "")
+    if stage == "failed":
+        return "failed", "heartbeat_terminal_failed"
+    if stage == "cancelled":
+        return "cancelled", "heartbeat_terminal_cancelled"
+    if stage == "completed":
+        return "completed", "heartbeat_terminal_completed"
+    return None
+
+
+def _heartbeat_grace_seconds(
+    heartbeat: dict[str, Any], configured_seconds: int
+) -> int:
+    try:
+        interval = max(1, int(heartbeat.get("heartbeat_interval_seconds", 30)))
+    except (TypeError, ValueError):
+        interval = 30
+    return max(configured_seconds, interval * 3)
 
 
 def _effective_grace_seconds(
@@ -126,14 +155,44 @@ def reconcile_resume_attempts(
         try:
             job = queue.get(job_id)
         except NoSuchJobError:
+            heartbeat = load_resume_heartbeat(repository, attempt_id)
+            heartbeat_terminal = _terminal_event_for_heartbeat(heartbeat)
+            if heartbeat_terminal is not None:
+                event_status, reason = heartbeat_terminal
+                event = record_resume_event(
+                    repository,
+                    attempt_id,
+                    event_status,
+                    stage="job_reconciliation",
+                    reason=reason,
+                    job_id=job_id,
+                    heartbeat_at=heartbeat.get("heartbeat_at"),
+                    heartbeat_stage=heartbeat.get("stage"),
+                    successor_campaign_id=dispatch.get("successor_campaign_id"),
+                )
+                reconciled += 1
+                attempts.append(
+                    {
+                        "resume_attempt_id": attempt_id,
+                        "job_id": job_id,
+                        "action": event_status,
+                        "reason": reason,
+                        "event": event,
+                    }
+                )
+                continue
             timestamp = (
-                latest_event.get("generated_at")
+                heartbeat.get("heartbeat_at")
+                if heartbeat
+                else latest_event.get("generated_at")
                 if latest_event
                 else dispatch.get("generated_at")
             )
             age_seconds = _age_seconds(timestamp, checked_at)
-            effective_grace = _effective_grace_seconds(
-                dispatch, stale_after_seconds
+            effective_grace = (
+                _heartbeat_grace_seconds(heartbeat, stale_after_seconds)
+                if heartbeat
+                else _effective_grace_seconds(dispatch, stale_after_seconds)
             )
             if age_seconds is None or age_seconds < effective_grace:
                 pending_grace += 1
@@ -145,6 +204,7 @@ def reconcile_resume_attempts(
                         "previous_status": latest_status,
                         "age_seconds": age_seconds,
                         "effective_grace_seconds": effective_grace,
+                        "heartbeat_available": heartbeat is not None,
                     }
                 )
                 continue
@@ -159,6 +219,8 @@ def reconcile_resume_attempts(
                 configured_grace_seconds=stale_after_seconds,
                 effective_grace_seconds=effective_grace,
                 age_seconds=age_seconds,
+                heartbeat_available=heartbeat is not None,
+                heartbeat_at=heartbeat.get("heartbeat_at") if heartbeat else None,
             )
             reconciled += 1
             attempts.append(
@@ -223,3 +285,54 @@ def reconcile_resume_attempts(
         "stale_after_seconds": stale_after_seconds,
         "attempts": attempts,
     }
+
+
+def _environment_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def run_resume_watchdog(
+    repository: ArtifactRepository | None = None,
+    queue: JobQueue | None = None,
+) -> dict[str, Any]:
+    repository = repository or ArtifactRepository()
+    queue = queue or RqJobQueue()
+    result = reconcile_resume_attempts(
+        repository,
+        queue,
+        limit=_environment_int("THERMOFORM_WATCHDOG_LIMIT", 100, 1, 100),
+        stale_after_seconds=_environment_int(
+            "THERMOFORM_WATCHDOG_GRACE_SECONDS", 900, 30, 604800
+        ),
+    )
+    watchdog_id = repository.version(
+        {
+            "checked_at": result["checked_at"],
+            "reconciled": result["reconciled"],
+            "attempts": result["attempts"],
+        },
+        "watchdog",
+    )
+    report = {
+        "watchdog_id": watchdog_id,
+        "status": "passed",
+        "source": "rq_cron",
+        "generated_at": datetime.now(UTC).isoformat(),
+        **result,
+        "downloads": {
+            "report": (
+                f"/api/v1/cae/{watchdog_id}/artifacts/"
+                f"{WATCHDOG_REPORT_FILENAME}"
+            )
+        },
+    }
+    repository.save_cae_artifact(
+        watchdog_id,
+        WATCHDOG_REPORT_FILENAME,
+        json.dumps(report, indent=2, sort_keys=True),
+    )
+    return report
