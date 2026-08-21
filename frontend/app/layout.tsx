@@ -19,12 +19,23 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = host.includes("localhost") ? "http" : "https";
   const image = `${protocol}://${host}/og.png`;
   const title = "Thermoform — Engineering Intelligence";
-  const description = "AI-assisted thermal design optimization for high-performance heat sinks.";
+  const description =
+    "AI-assisted thermal design optimization for high-performance heat sinks.";
   return {
-    title, description,
+    title,
+    description,
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title, description, images: [{ url: image, width: 1200, height: 630 }] },
-    twitter: { card: "summary_large_image", title, description, images: [image] },
+    openGraph: {
+      title,
+      description,
+      images: [{ url: image, width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [image],
+    },
   };
 }
 
