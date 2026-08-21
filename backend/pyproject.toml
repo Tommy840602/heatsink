@@ -5,8 +5,15 @@ description = "FastAPI backend for the Thermoform thermal design platform"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1",
+  "joblib>=1.5,<2",
+  "numpy>=2.2,<3",
+  "pymoo>=0.6.1,<1",
+  "pyDOE3>=1.0,<2",
   "pydantic>=2.10,<3",
+  "scikit-learn>=1.6,<2",
+  "scipy>=1.15,<2",
   "uvicorn[standard]>=0.34,<1",
+  "xgboost>=3.0,<4",
 ]
 
 [project.optional-dependencies]

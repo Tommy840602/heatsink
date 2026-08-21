@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, type SimulationResult } from "../lib/api";
+import {
+  api,
+  type Phase1Result,
+  type SimulationResult,
+  type SurrogatePrediction,
+} from "../lib/api";
 
 const nav = [
   ["overview", "⌂", "Overview"],
@@ -23,6 +28,22 @@ const stages = [
   ["05", "Optimization", "Ready to run", "next"],
 ];
 
+const demoMetrics = [
+  { model: "RSM", r2: 0.921, rmse: 3.48, mae: 2.61, cv_rmse: 3.72, training_ms: 18, inference_ms: 1 },
+  { model: "RandomForest", r2: 0.963, rmse: 2.05, mae: 1.48, cv_rmse: 2.22, training_ms: 146, inference_ms: 2 },
+  { model: "XGBoost", r2: 0.976, rmse: 1.62, mae: 1.19, cv_rmse: 1.78, training_ms: 204, inference_ms: 1 },
+  { model: "GPR", r2: 0.984, rmse: 1.21, mae: 0.92, cv_rmse: 1.34, training_ms: 312, inference_ms: 2 },
+];
+
+const labelFor = (name: string) =>
+  ({
+    fin_count: "Fin count",
+    fin_thickness: "Fin thickness",
+    fin_height: "Fin height",
+    fin_spacing: "Fin spacing",
+    air_velocity: "Air velocity",
+  })[name] ?? name;
+
 function PageHead({
   kicker,
   title,
@@ -37,7 +58,7 @@ function PageHead({
   return (
     <>
       <div className="eyebrow">
-        {kicker} <span>•</span> DATASET V12
+        {kicker} <span>•</span> TRACEABLE DATASET
       </div>
       <div className="title-row">
         <div>
@@ -54,7 +75,28 @@ function PageHead({
   );
 }
 
-function Overview({ go }: { go: (page: string) => void }) {
+function Overview({
+  go,
+  phase1,
+}: {
+  go: (page: string) => void;
+  phase1: Phase1Result | null;
+}) {
+  const modelMetrics = phase1?.model_metrics.t_max ?? demoMetrics;
+  const selectedModel = phase1?.selected_models.t_max ?? "GPR";
+  const recommended = phase1?.optimization.recommended;
+  const responses = recommended?.responses;
+  const design = recommended?.design;
+  const maxCv = Math.max(...modelMetrics.map((metric) => metric.cv_rmse), 0.001);
+  const workflowStages = phase1
+    ? [
+        ["01", "Design space", "5 variables", "done"],
+        ["02", "DOE", `${phase1.experiment_count} experiments`, "done"],
+        ["03", "Simulation", `${phase1.experiment_count} / ${phase1.experiment_count} complete`, "done"],
+        ["04", "Surrogate", `${selectedModel} selected`, "done"],
+        ["05", "Optimization", `${phase1.optimization.evaluations} evaluations`, "done"],
+      ]
+    : stages;
   return (
     <div className="content">
       <PageHead
@@ -66,7 +108,7 @@ function Overview({ go }: { go: (page: string) => void }) {
       <div className="metrics">
         <article>
           <small>EXPERIMENTS</small>
-          <strong>64</strong>
+          <strong>{phase1?.experiment_count ?? 64}</strong>
           <p>
             <span className="up">↗ 12</span> since last run
           </p>
@@ -74,9 +116,12 @@ function Overview({ go }: { go: (page: string) => void }) {
         </article>
         <article>
           <small>BEST MODEL</small>
-          <strong>GPR</strong>
+          <strong>{selectedModel}</strong>
           <p>
-            <span>R² 0.984</span> · CV RMSE 1.21°C
+            <span>
+              R² {modelMetrics.find((item) => item.model === selectedModel)?.r2.toFixed(3)}
+            </span>{" "}
+            · CV RMSE {modelMetrics.find((item) => item.model === selectedModel)?.cv_rmse.toFixed(2)}°C
           </p>
           <i>⌘</i>
         </article>
@@ -85,7 +130,7 @@ function Overview({ go }: { go: (page: string) => void }) {
             BEST T<sub>MAX</sub>
           </small>
           <strong>
-            68.4<em>°C</em>
+            {(responses?.t_max ?? 68.4).toFixed(1)}<em>°C</em>
           </strong>
           <p>
             <span className="down">↓ 8.2°C</span> vs. baseline
@@ -95,7 +140,7 @@ function Overview({ go }: { go: (page: string) => void }) {
         <article>
           <small>EST. MASS</small>
           <strong>
-            287<em>g</em>
+            {(responses?.mass ?? 287).toFixed(0)}<em>g</em>
           </strong>
           <p>
             <span className="down">↓ 13%</span> vs. baseline
@@ -112,7 +157,7 @@ function Overview({ go }: { go: (page: string) => void }) {
           <button onClick={() => go("simulation")}>View activity log ↗</button>
         </div>
         <div className="pipeline">
-          {stages.map(([num, name, detail, state], index) => (
+          {workflowStages.map(([num, name, detail, state], index) => (
             <div className={`stage ${state}`} key={name}>
               <div className="stage-top">
                 <span>{num}</span>
@@ -126,7 +171,7 @@ function Overview({ go }: { go: (page: string) => void }) {
               </div>
               <strong>{name}</strong>
               <small>{detail}</small>
-              {index < stages.length - 1 && <i />}
+              {index < workflowStages.length - 1 && <i />}
             </div>
           ))}
         </div>
@@ -151,20 +196,15 @@ function Overview({ go }: { go: (page: string) => void }) {
               <span>0</span>
             </div>
             <div className="bars">
-              {[
-                ["RSM", "3.48", 87],
-                ["Random Forest", "2.05", 51],
-                ["XGBoost", "1.62", 40],
-                ["GPR", "1.21", 30],
-              ].map(([name, val, height]) => (
-                <div className="bar-column" key={name}>
+              {modelMetrics.map((metric) => (
+                <div className="bar-column" key={metric.model}>
                   <div
-                    className={`bar ${name === "GPR" ? "best" : ""}`}
-                    style={{ height: `${height}%` }}
+                    className={`bar ${metric.model === selectedModel ? "best" : ""}`}
+                    style={{ height: `${Math.max((metric.cv_rmse / maxCv) * 88, 12)}%` }}
                   >
-                    <b>{val}</b>
+                    <b>{metric.cv_rmse.toFixed(2)}</b>
                   </div>
-                  <span>{name}</span>
+                  <span>{metric.model}</span>
                 </div>
               ))}
             </div>
@@ -184,29 +224,29 @@ function Overview({ go }: { go: (page: string) => void }) {
               <small>
                 T<sub>MAX</sub>
               </small>
-              <strong>68.4°C</strong>
+              <strong>{(responses?.t_max ?? 68.4).toFixed(1)}°C</strong>
               <small>
                 R<sub>θ</sub>
               </small>
-              <strong>0.434 K/W</strong>
+              <strong>{(responses?.thermal_resistance ?? 0.434).toFixed(3)} K/W</strong>
             </div>
           </div>
           <div className="parameters">
             <span>
               <small>FINS</small>
-              <b>48</b>
+              <b>{design?.fin_count ?? 48}</b>
             </span>
             <span>
               <small>HEIGHT</small>
-              <b>52 mm</b>
+              <b>{(design?.fin_height ?? 52).toFixed(1)} mm</b>
             </span>
             <span>
               <small>SPACING</small>
-              <b>2.4 mm</b>
+              <b>{(design?.fin_spacing ?? 2.4).toFixed(2)} mm</b>
             </span>
             <span>
               <small>VELOCITY</small>
-              <b>3.2 m/s</b>
+              <b>{(design?.air_velocity ?? 3.2).toFixed(2)} m/s</b>
             </span>
           </div>
           <button className="outline-button" onClick={() => go("digital-twin")}>
@@ -231,9 +271,15 @@ function HeatSink({ count = 10 }: { count?: number }) {
 function ModuleView({
   active,
   notify,
+  phase1,
+  runWorkflow,
+  workflowRunning,
 }: {
   active: string;
   notify: (s: string) => void;
+  phase1: Phase1Result | null;
+  runWorkflow: (method: string, runs: number) => Promise<void>;
+  workflowRunning: boolean;
 }) {
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
@@ -242,9 +288,9 @@ function ModuleView({
   const [spacing, setSpacing] = useState(2.4);
   const [velocity, setVelocity] = useState(3.2);
   const [model, setModel] = useState("GPR");
-  const [apiPrediction, setApiPrediction] = useState<SimulationResult | null>(
-    null,
-  );
+  const [apiPrediction, setApiPrediction] = useState<
+    SimulationResult | SurrogatePrediction | null
+  >(null);
   const design = useMemo(
     () => ({
       fin_count: fins,
@@ -267,13 +313,15 @@ function ModuleView({
   useEffect(() => {
     if (active !== "digital-twin") return;
     const timer = window.setTimeout(() => {
-      api
-        .predict(design)
+      const prediction = phase1
+        ? api.predictModel(phase1.model_id, design)
+        : api.predict(design);
+      prediction
         .then(setApiPrediction)
         .catch(() => setApiPrediction(null));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [active, design]);
+  }, [active, design, phase1]);
   const predictedTemp = apiPrediction?.t_max.toFixed(1) ?? temp;
   const predictedTheta =
     apiPrediction?.thermal_resistance.toFixed(3) ?? theta;
@@ -281,6 +329,45 @@ function ModuleView({
     apiPrediction?.pressure_drop.toFixed(1) ??
     (4.8 + (velocity * 4.9) / spacing).toFixed(1);
   const predictedMass = apiPrediction?.mass.toFixed(0) ?? String(mass);
+  const predictedUncertainty =
+    apiPrediction && "t_max_uncertainty" in apiPrediction
+      ? apiPrediction.t_max_uncertainty
+      : undefined;
+  const experiments = phase1?.experiments ?? [];
+  const modelMetrics = phase1?.model_metrics.t_max ?? demoMetrics;
+  const selectedModel = phase1?.selected_models.t_max ?? "GPR";
+  const pareto = phase1?.optimization.pareto ?? [];
+  const recommended = phase1?.optimization.recommended;
+  const sortedTemps = experiments.map((row) => row.t_max).sort((a, b) => a - b);
+  const medianTemp = sortedTemps.length
+    ? sortedTemps[Math.floor(sortedTemps.length / 2)]
+    : 74.8;
+  const average = (key: "thermal_resistance" | "pressure_drop") =>
+    experiments.length
+      ? experiments.reduce((sum, row) => sum + row[key], 0) / experiments.length
+      : key === "thermal_resistance"
+        ? 0.498
+        : 18.6;
+  const analysis = phase1?.analysis;
+  const effectRows = analysis
+    ? [...analysis.main_effects, ...analysis.interactions.slice(0, 1)]
+        .sort((a, b) => b.f_value - a.f_value)
+        .slice(0, 6)
+    : null;
+  const maximumEffect = Math.max(...(effectRows?.map((row) => row.f_value) ?? [1]));
+  const diagnosticPoints = analysis?.diagnostics.residual_vs_fitted ?? [];
+  const fittedValues = diagnosticPoints.map((point) => point.fitted);
+  const residualValues = diagnosticPoints.map((point) => point.residual);
+  const fittedMin = Math.min(...(fittedValues.length ? fittedValues : [0]));
+  const fittedSpan = Math.max(Math.max(...(fittedValues.length ? fittedValues : [1])) - fittedMin, 0.001);
+  const residualMax = Math.max(...(residualValues.length ? residualValues.map(Math.abs) : [1]), 0.001);
+  const paretoForChart = pareto.length ? pareto.slice(0, 12) : [];
+  const paretoMasses = paretoForChart.map((item) => item.responses.mass);
+  const paretoTemps = paretoForChart.map((item) => item.responses.t_max);
+  const massMin = Math.min(...(paretoMasses.length ? paretoMasses : [0]));
+  const massSpan = Math.max(Math.max(...(paretoMasses.length ? paretoMasses : [1])) - massMin, 0.001);
+  const tempMin = Math.min(...(paretoTemps.length ? paretoTemps : [0]));
+  const tempSpan = Math.max(Math.max(...(paretoTemps.length ? paretoTemps : [1])) - tempMin, 0.001);
   if (active === "design")
     return (
       <div className="content">
@@ -424,25 +511,19 @@ function ModuleView({
           </label>
           <button
             className="primary-action compact"
-            onClick={() =>
-              api
-                .generateDoe(method, runs)
-                .then((result) =>
-                  notify(
-                    `${method} matrix generated by FastAPI · ${result.runs} runs · ${result.dataset_version}`,
-                  ),
-                )
-                .catch(() => notify("Backend unavailable · using preview matrix"))
-            }
+            disabled={workflowRunning}
+            onClick={() => runWorkflow(method, runs)}
           >
-            Generate matrix
+            {workflowRunning ? "Running Phase 1…" : "Run DOE + Phase 1"}
           </button>
         </section>
         <section className="panel table-panel">
           <div className="panel-title">
             <div>
               <h2>{method} experiment matrix</h2>
-              <p>{runs} runs · 5 factors · maximin criterion · seed 42</p>
+              <p>
+                {phase1?.experiment_count ?? runs} runs · 5 factors · {method === "LHS" ? "maximin" : "standard quadratic"} · seed 42
+              </p>
             </div>
             <button className="text-button">Export CSV ↓</button>
           </div>
@@ -456,14 +537,23 @@ function ModuleView({
               <span>VELOCITY</span>
               <span>STATUS</span>
             </div>
-            {[
-              [1, 30, 0.4, 30, 1.5, 1.0],
-              [2, 40, 0.5, 40, 2.0, 2.0],
-              [3, 50, 0.7, 50, 2.5, 3.0],
-              [4, 45, 0.6, 55, 2.8, 3.6],
-              [5, 36, 0.85, 34, 3.3, 4.2],
-              [6, 58, 0.35, 48, 1.8, 2.7],
-            ].map((r, i) => (
+            {(experiments.length
+              ? experiments.slice(0, 6).map((row) => [
+                  row.run,
+                  row.fin_count,
+                  row.fin_thickness,
+                  row.fin_height,
+                  row.fin_spacing,
+                  row.air_velocity,
+                ])
+              : [
+                  [1, 30, 0.4, 30, 1.5, 1.0],
+                  [2, 40, 0.5, 40, 2.0, 2.0],
+                  [3, 50, 0.7, 50, 2.5, 3.0],
+                  [4, 45, 0.6, 55, 2.8, 3.6],
+                  [5, 36, 0.85, 34, 3.3, 4.2],
+                  [6, 58, 0.35, 48, 1.8, 2.7],
+                ]).map((r, i) => (
               <div className="tr" key={i}>
                 {r.map((x, j) => (
                   <span key={j}>
@@ -476,8 +566,8 @@ function ModuleView({
             ))}
           </div>
           <div className="table-foot">
-            Showing 6 of {runs} experiments{" "}
-            <span>Version will be frozen on simulation</span>
+            Showing {Math.min(6, phase1?.experiment_count ?? runs)} of {phase1?.experiment_count ?? runs} experiments{" "}
+            <span>{phase1 ? phase1.dataset_version : "Version will be frozen on simulation"}</span>
           </div>
         </section>
       </div>
@@ -489,7 +579,7 @@ function ModuleView({
           kicker="PHYSICS ENGINE"
           title="Batch simulation"
           description="Evaluate heat transfer, pressure drop, and mass with the deterministic reduced-order model."
-          badge="64 / 64 complete"
+          badge={`${phase1?.experiment_count ?? 64} / ${phase1?.experiment_count ?? 64} complete`}
         />
         <div className="metrics compact-metrics">
           <article>
@@ -497,23 +587,25 @@ function ModuleView({
               MEDIAN T<sub>MAX</sub>
             </small>
             <strong>
-              74.8<em>°C</em>
+              {medianTemp.toFixed(1)}<em>°C</em>
             </strong>
-            <p>Range 66.9 — 91.2</p>
+            <p>
+              Range {sortedTemps.length ? sortedTemps[0].toFixed(1) : "66.9"} — {sortedTemps.length ? sortedTemps.at(-1)?.toFixed(1) : "91.2"}
+            </p>
           </article>
           <article>
             <small>
               AVG. R<sub>θ</sub>
             </small>
             <strong>
-              0.498<em>K/W</em>
+              {average("thermal_resistance").toFixed(3)}<em>K/W</em>
             </strong>
             <p>Power 100 W</p>
           </article>
           <article>
             <small>AVG. ΔP</small>
             <strong>
-              18.6<em>Pa</em>
+              {average("pressure_drop").toFixed(1)}<em>Pa</em>
             </strong>
             <p>Limit 35 Pa</p>
           </article>
@@ -529,7 +621,9 @@ function ModuleView({
           <div className="panel-title">
             <div>
               <h2>Simulation runs</h2>
-              <p>Physics simulator v1.4.2 · dataset v12</p>
+              <p>
+                Physics simulator {phase1?.simulator_version ?? "1.0.0"} · {phase1?.dataset_version ?? "demo dataset"}
+              </p>
             </div>
             <button
               className="primary-action compact"
@@ -541,13 +635,21 @@ function ModuleView({
             </button>
           </div>
           <div className="run-list">
-            {[
-              ["EXP-064", "68.4°C", "0.434 K/W", "22.1 Pa", "287 g"],
-              ["EXP-063", "71.2°C", "0.462 K/W", "16.8 Pa", "301 g"],
-              ["EXP-062", "69.7°C", "0.447 K/W", "27.4 Pa", "274 g"],
-              ["EXP-061", "76.1°C", "0.511 K/W", "12.3 Pa", "264 g"],
-              ["EXP-060", "72.8°C", "0.478 K/W", "19.5 Pa", "293 g"],
-            ].map((r, i) => (
+            {(experiments.length
+              ? experiments.slice(-5).reverse().map((row) => [
+                  `EXP-${String(row.run).padStart(3, "0")}`,
+                  `${row.t_max.toFixed(1)}°C`,
+                  `${row.thermal_resistance.toFixed(3)} K/W`,
+                  `${row.pressure_drop.toFixed(1)} Pa`,
+                  `${row.mass.toFixed(0)} g`,
+                ])
+              : [
+                  ["EXP-064", "68.4°C", "0.434 K/W", "22.1 Pa", "287 g"],
+                  ["EXP-063", "71.2°C", "0.462 K/W", "16.8 Pa", "301 g"],
+                  ["EXP-062", "69.7°C", "0.447 K/W", "27.4 Pa", "274 g"],
+                  ["EXP-061", "76.1°C", "0.511 K/W", "12.3 Pa", "264 g"],
+                  ["EXP-060", "72.8°C", "0.478 K/W", "19.5 Pa", "293 g"],
+                ]).map((r, i) => (
               <div className="run-row" key={r[0]}>
                 <span className="run-id">
                   <i>✓</i>
@@ -588,20 +690,26 @@ function ModuleView({
               <span className="tag">MAIN EFFECTS</span>
             </div>
             <div className="effects">
-              {[
-                ["Air velocity", 94, "−18.42"],
-                ["Fin height", 67, "−11.07"],
-                ["Fin count", 54, "−8.91"],
-                ["Spacing × Velocity", 39, "−5.62"],
-                ["Fin spacing", 31, "−4.08"],
-                ["Thickness", 18, "−2.11"],
-              ].map(([n, w, v]) => (
-                <div key={n}>
-                  <span>{n}</span>
+              {(effectRows
+                ? effectRows.map((row) => [
+                    row.source.split(" × ").map(labelFor).join(" × "),
+                    (row.f_value / maximumEffect) * 94,
+                    `F ${row.f_value.toFixed(2)}`,
+                  ] as [string, number, string])
+                : [
+                    ["Air velocity", 94, "F 18.42"],
+                    ["Fin height", 67, "F 11.07"],
+                    ["Fin count", 54, "F 8.91"],
+                    ["Spacing × Velocity", 39, "F 5.62"],
+                    ["Fin spacing", 31, "F 4.08"],
+                    ["Thickness", 18, "F 2.11"],
+                  ]).map(([n, w, v]) => (
+                <div key={String(n)}>
+                  <span>{String(n)}</span>
                   <i>
-                    <b style={{ width: `${w}%` }} />
+                    <b style={{ width: `${Number(w)}%` }} />
                   </i>
-                  <em>{v}</em>
+                  <em>{String(v)}</em>
                 </div>
               ))}
             </div>
@@ -616,12 +724,17 @@ function ModuleView({
             </div>
             <div className="scatter">
               <i className="zero" />
-              {Array.from({ length: 28 }).map((_, i) => (
+              {(diagnosticPoints.length
+                ? diagnosticPoints
+                : Array.from({ length: 28 }).map((_, i) => ({
+                    fitted: ((i * 31) % 87) + 7,
+                    residual: (((i * 47) % 69) - 34) / 34,
+                  }))).map((point, i) => (
                 <b
                   key={i}
                   style={{
-                    left: `${7 + ((i * 31) % 87)}%`,
-                    top: `${15 + ((i * 47) % 69)}%`,
+                    left: `${diagnosticPoints.length ? 5 + ((point.fitted - fittedMin) / fittedSpan) * 90 : point.fitted}%`,
+                    top: `${50 - (point.residual / residualMax) * 42}%`,
                   }}
                 />
               ))}
@@ -629,15 +742,15 @@ function ModuleView({
             <div className="diagnostic-stats">
               <span>
                 <small>SHAPIRO-WILK</small>
-                <b>p = 0.218</b>
+                <b>p = {(analysis?.diagnostics.shapiro_p_value ?? 0.218).toFixed(3)}</b>
               </span>
               <span>
                 <small>OUTLIERS</small>
-                <b>1 flagged</b>
+                <b>{analysis?.diagnostics.outlier_indices.length ?? 1} flagged</b>
               </span>
               <span>
                 <small>BIAS</small>
-                <b>−0.03°C</b>
+                <b>{analysis ? `${analysis.rmse.toFixed(3)}°C RMSE` : "−0.03°C"}</b>
               </span>
             </div>
           </section>
@@ -658,13 +771,22 @@ function ModuleView({
                 <span>F-VALUE</span>
                 <span>P-VALUE</span>
               </div>
-              {[
-                ["Model", "1,284.2", "20", "64.21", "38.47", "< 0.001"],
-                ["Linear", "1,021.8", "5", "204.36", "122.39", "< 0.001"],
-                ["Interactions", "188.6", "10", "18.86", "11.29", "0.002"],
-                ["Quadratic", "73.8", "5", "14.76", "8.84", "0.008"],
-                ["Residual", "71.8", "43", "1.67", "—", "—"],
-              ].map((r) => (
+              {(analysis
+                ? analysis.anova.slice(0, 7).map((row) => [
+                    row.source,
+                    row.sum_sq.toFixed(3),
+                    String(row.df),
+                    row.mean_sq.toFixed(3),
+                    row.f_value.toFixed(3),
+                    row.p_value < 0.001 ? "< 0.001" : row.p_value.toFixed(4),
+                  ])
+                : [
+                    ["Model", "1,284.2", "20", "64.21", "38.47", "< 0.001"],
+                    ["Linear", "1,021.8", "5", "204.36", "122.39", "< 0.001"],
+                    ["Interactions", "188.6", "10", "18.86", "11.29", "0.002"],
+                    ["Quadratic", "73.8", "5", "14.76", "8.84", "0.008"],
+                    ["Residual", "71.8", "43", "1.67", "—", "—"],
+                  ]).map((r) => (
                 <div className="tr" key={r[0]}>
                   {r.map((x, i) => (
                     <span
@@ -690,7 +812,7 @@ function ModuleView({
           kicker="SURROGATE MODELING"
           title="Model comparison"
           description="Select the best generalizing predictor—not simply the highest training score."
-          badge="GPR recommended"
+          badge={`${selectedModel} recommended`}
         />
         <section className="panel">
           <div className="model-table">
@@ -703,19 +825,16 @@ function ModuleView({
               <span>TRAINING</span>
               <span>STATUS</span>
             </div>
-            {[
-              ["RSM", "0.921", "3.48°C", "2.61°C", "3.72°C", "18 ms"],
-              [
-                "Random Forest",
-                "0.963",
-                "2.05°C",
-                "1.48°C",
-                "2.22°C",
-                "146 ms",
-              ],
-              ["XGBoost", "0.976", "1.62°C", "1.19°C", "1.78°C", "204 ms"],
-              ["GPR", "0.984", "1.21°C", "0.92°C", "1.34°C", "312 ms"],
-            ].map((r) => (
+            {modelMetrics.map((metric) => {
+              const r = [
+                metric.model,
+                metric.r2.toFixed(3),
+                `${metric.rmse.toFixed(2)}°C`,
+                `${metric.mae.toFixed(2)}°C`,
+                `${metric.cv_rmse.toFixed(2)}°C`,
+                `${metric.training_ms.toFixed(0)} ms`,
+              ];
+              return (
               <button
                 className={`tr ${model === r[0] ? "model-selected" : ""}`}
                 onClick={() => setModel(r[0])}
@@ -728,14 +847,15 @@ function ModuleView({
                   </span>
                 ))}
                 <span>
-                  {r[0] === "GPR" ? (
+                  {r[0] === selectedModel ? (
                     <b className="recommended">RECOMMENDED</b>
                   ) : (
                     "Trained"
                   )}
                 </span>
               </button>
-            ))}
+              );
+            })}
           </div>
         </section>
         <div className="module-grid top-gap">
@@ -753,10 +873,12 @@ function ModuleView({
                   PREDICTED T<sub>MAX</sub>
                 </small>
                 <strong>
-                  {model === "GPR" ? "68.4" : "69.1"}
+                  {(recommended?.responses.t_max ?? (model === "GPR" ? 68.4 : 69.1)).toFixed(1)}
                   <em>°C</em>
                 </strong>
-                <p>95% confidence: 66.1 — 70.7°C</p>
+                <p>
+                  Selected by lowest cross-validated RMSE · model artifact {phase1?.model_id ?? "demo"}
+                </p>
               </div>
               <div className="gauge">
                 <i style={{ width: "64%" }} />
@@ -772,7 +894,7 @@ function ModuleView({
               </div>
             </div>
             <div className="uncertainty">
-              <strong>± 2.3°C</strong>
+              <strong>GPR σ(x)</strong>
               <div>
                 {Array.from({ length: 18 }).map((_, i) => (
                   <i key={i} style={{ height: `${25 + ((i * 29) % 62)}%` }} />
@@ -794,7 +916,7 @@ function ModuleView({
           kicker="MULTI-OBJECTIVE SEARCH"
           title="Optimization"
           description="Explore feasible trade-offs between thermal performance, pressure drop, and mass."
-          badge="128 generations"
+          badge={phase1 ? `${phase1.optimization.evaluations} evaluations` : "NSGA-II ready"}
         />
         <div className="optimization-layout">
           <section className="panel objective-panel">
@@ -831,11 +953,10 @@ function ModuleView({
             </div>
             <button
               className="primary-action"
-              onClick={() =>
-                notify("Optimization run started · 128 generations")
-              }
+              disabled={workflowRunning}
+              onClick={() => runWorkflow(phase1?.method ?? "LHS", phase1?.experiment_count ?? 48)}
             >
-              Run optimization <span>→</span>
+              {workflowRunning ? "Optimizing…" : "Run Phase 1 optimization"} <span>→</span>
             </button>
           </section>
           <section className="panel pareto-panel">
@@ -853,19 +974,18 @@ function ModuleView({
                 T<sub>MAX</sub> (°C)
               </span>
               <i className="front-line" />
-              {[
-                [11, 20],
-                [19, 31],
-                [29, 40],
-                [39, 49],
-                [50, 57],
-                [61, 63],
-                [72, 70],
-                [84, 76],
-              ].map((p, i) => (
+              {(paretoForChart.length
+                ? paretoForChart.map((candidate) => [
+                    8 + ((candidate.responses.mass - massMin) / massSpan) * 78,
+                    16 + ((candidate.responses.t_max - tempMin) / tempSpan) * 62,
+                  ])
+                : [
+                    [11, 20], [19, 31], [29, 40], [39, 49],
+                    [50, 57], [61, 63], [72, 70], [84, 76],
+                  ]).map((p, i) => (
                 <button
                   key={i}
-                  className={i === 3 ? "chosen" : ""}
+                  className={i === Math.floor((paretoForChart.length || 8) / 2) ? "chosen" : ""}
                   style={{ left: `${p[0]}%`, top: `${p[1]}%` }}
                   onClick={() =>
                     notify(
@@ -880,11 +1000,18 @@ function ModuleView({
           </section>
         </div>
         <div className="candidate-strip">
-          {[
-            ["01", "66.9°C", "341 g", "31.2 Pa"],
-            ["04", "68.4°C", "287 g", "22.1 Pa"],
-            ["07", "71.0°C", "248 g", "16.8 Pa"],
-          ].map((r, i) => (
+          {(pareto.length
+            ? [pareto[0], recommended ?? pareto[Math.floor(pareto.length / 2)], pareto.at(-1)!].map((candidate, index) => [
+                String(index + 1).padStart(2, "0"),
+                `${candidate.responses.t_max.toFixed(1)}°C`,
+                `${candidate.responses.mass.toFixed(0)} g`,
+                `${candidate.responses.pressure_drop.toFixed(1)} Pa`,
+              ])
+            : [
+                ["01", "66.9°C", "341 g", "31.2 Pa"],
+                ["04", "68.4°C", "287 g", "22.1 Pa"],
+                ["07", "71.0°C", "248 g", "16.8 Pa"],
+              ]).map((r, i) => (
             <button className={i === 1 ? "selected" : ""} key={r[0]}>
               <small>CANDIDATE {r[0]}</small>
               <strong>{r[1]}</strong>
@@ -903,7 +1030,7 @@ function ModuleView({
           kicker="INTERACTIVE PREDICTION"
           title="Digital twin"
           description="Explore design changes instantly with the GPR surrogate and quantified uncertainty."
-          badge="Model v8 · live"
+          badge={phase1 ? `${selectedModel} · ${phase1.model_id}` : "Physics preview"}
         />
         <div className="twin-layout">
           <section className="panel twin-controls">
@@ -1004,7 +1131,11 @@ function ModuleView({
                 {predictedTheta}
                 <em>K/W</em>
               </strong>
-              <p>± 0.023 uncertainty</p>
+              <p>
+                {predictedUncertainty !== undefined
+                  ? `Tmax uncertainty ± ${predictedUncertainty.toFixed(2)}°C`
+                  : "Physics estimate"}
+              </p>
             </article>
             <article>
               <small>PRESSURE DROP</small>
@@ -1020,7 +1151,13 @@ function ModuleView({
                 {predictedMass}
                 <em>g</em>
               </strong>
-              <p>{apiPrediction ? "FastAPI physics result" : "Preview estimate"}</p>
+              <p>
+                {phase1 && apiPrediction
+                  ? `${selectedModel} surrogate prediction`
+                  : apiPrediction
+                    ? "FastAPI physics result"
+                    : "Preview estimate"}
+              </p>
             </article>
             <button
               className="primary-action"
@@ -1115,6 +1252,8 @@ function ModuleView({
 export default function Home() {
   const [active, setActive] = useState("overview");
   const [toast, setToast] = useState("");
+  const [phase1, setPhase1] = useState<Phase1Result | null>(null);
+  const [workflowRunning, setWorkflowRunning] = useState(false);
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "demo">(
     "checking",
   );
@@ -1127,6 +1266,21 @@ export default function Home() {
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
+  };
+  const runWorkflow = async (method = "LHS", runs = 48) => {
+    setWorkflowRunning(true);
+    notify(`${method} Phase 1 started · DOE → physics → ML → NSGA-II`);
+    try {
+      const result = await api.runPhase1(method, runs);
+      setPhase1(result);
+      setApiStatus("online");
+      notify(`Phase 1 complete · ${result.experiment_count} experiments · ${result.selected_models.t_max} selected`);
+    } catch {
+      setApiStatus("demo");
+      notify("FastAPI unavailable · start backend on :8000");
+    } finally {
+      setWorkflowRunning(false);
+    }
   };
   return (
     <main className="shell">
@@ -1147,7 +1301,7 @@ export default function Home() {
             >
               <span>{icon}</span>
               {label}
-              {id === "simulation" && <i>64</i>}
+              {id === "simulation" && <i>{phase1?.experiment_count ?? 64}</i>}
             </button>
           ))}
         </nav>
@@ -1196,18 +1350,23 @@ export default function Home() {
             </button>
             <button
               className="run-button"
-              onClick={() =>
-                notify("Workflow queued · DOE → simulation → training")
-              }
+              disabled={workflowRunning}
+              onClick={() => runWorkflow()}
             >
-              Run workflow <span>→</span>
+              {workflowRunning ? "Running Phase 1…" : "Run workflow"} <span>→</span>
             </button>
           </div>
         </header>
         {active === "overview" ? (
-          <Overview go={setActive} />
+          <Overview go={setActive} phase1={phase1} />
         ) : (
-          <ModuleView active={active} notify={notify} />
+          <ModuleView
+            active={active}
+            notify={notify}
+            phase1={phase1}
+            runWorkflow={runWorkflow}
+            workflowRunning={workflowRunning}
+          />
         )}
       </section>
       {toast && (

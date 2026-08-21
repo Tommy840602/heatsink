@@ -31,9 +31,12 @@ test("React frontend uses the typed FastAPI client", async () => {
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(page, /api\s*\.\s*health\(\)/);
-  assert.match(page, /api\s*\.\s*generateDoe/);
+  assert.match(page, /api\s*\.\s*runPhase1/);
   assert.match(page, /api\s*\.\s*predict/);
+  assert.match(page, /api\s*\.\s*predictModel/);
   assert.match(api, /NEXT_PUBLIC_API_URL/);
+  assert.match(api, /\/workflows\/phase1\/run/);
+  assert.match(api, /\/models\/\$\{modelId\}\/predict/);
   assert.match(api, /\/simulations\/predict/);
   assert.match(layout, /Thermoform — Engineering Intelligence/);
 });

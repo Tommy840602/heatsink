@@ -1,5 +1,7 @@
-import itertools
-import random
+from collections.abc import Callable
+
+import numpy as np
+from pyDOE3 import bbdesign, ccdesign, lhs
 
 from app.domain.models import DoeRequest, FactorRange
 
@@ -13,40 +15,49 @@ DEFAULT_FACTORS = [
 ]
 
 
-def _scale(value: float, factor: FactorRange) -> float | int:
-    scaled = factor.lower + value * (factor.upper - factor.lower)
-    return int(round(scaled)) if factor.integer else round(scaled, 5)
+def _scale(unit_value: float, factor: FactorRange) -> float | int:
+    value = factor.lower + float(unit_value) * (factor.upper - factor.lower)
+    return int(round(value)) if factor.integer else round(value, 6)
+
+
+def _matrix_to_records(matrix: np.ndarray, factors: list[FactorRange]) -> list[dict[str, float | int]]:
+    normalized = np.clip((matrix + 1.0) / 2.0, 0.0, 1.0)
+    return [
+        {factor.name: _scale(row[index], factor) for index, factor in enumerate(factors)}
+        for row in normalized
+    ]
 
 
 def _lhs(request: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
-    rng = random.Random(request.seed)
-    columns: list[list[float]] = []
-    for _ in factors:
-        values = [(index + rng.random()) / request.runs for index in range(request.runs)]
-        rng.shuffle(values)
-        columns.append(values)
-    return [
-        {factor.name: _scale(columns[col][row], factor) for col, factor in enumerate(factors)}
-        for row in range(request.runs)
-    ]
+    matrix = lhs(
+        len(factors),
+        samples=request.runs,
+        criterion="maximin",
+        iterations=40,
+        seed=request.seed,
+    )
+    coded = matrix * 2.0 - 1.0
+    return _matrix_to_records(coded, factors)
 
 
-def _structured(request: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
-    levels = [0.0, 0.5, 1.0]
-    candidates = list(itertools.product(levels, repeat=len(factors)))
-    if request.method == "BBD":
-        candidates = [point for point in candidates if sum(value != 0.5 for value in point) <= 2]
-    rng = random.Random(request.seed)
-    rng.shuffle(candidates)
-    while len(candidates) < request.runs:
-        candidates.extend(candidates[: request.runs - len(candidates)])
-    return [
-        {factor.name: _scale(point[index], factor) for index, factor in enumerate(factors)}
-        for point in candidates[: request.runs]
-    ]
+def _ccd(_: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
+    matrix = ccdesign(len(factors), center=(4, 4), alpha="orthogonal", face="ccf")
+    return _matrix_to_records(matrix, factors)
+
+
+def _bbd(_: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
+    matrix = bbdesign(len(factors), center=6)
+    return _matrix_to_records(matrix, factors)
+
+
+GENERATORS: dict[str, Callable[[DoeRequest, list[FactorRange]], list[dict[str, float | int]]]] = {
+    "LHS": _lhs,
+    "CCD": _ccd,
+    "BBD": _bbd,
+}
 
 
 def generate_doe(request: DoeRequest) -> tuple[list[FactorRange], list[dict[str, float | int]]]:
+    """Generate a standards-based design in physical units and within validated bounds."""
     factors = request.factors or DEFAULT_FACTORS
-    matrix = _lhs(request, factors) if request.method == "LHS" else _structured(request, factors)
-    return factors, matrix
+    return factors, GENERATORS[request.method](request, factors)
