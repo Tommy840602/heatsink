@@ -122,13 +122,14 @@ services:
     command:
       - sh
       - -c
-      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store
+      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store /thanos/compact
     volumes:
       - thanos-receive-data:/thanos/receive-1
       - thanos-receive-2-data:/thanos/receive-2
       - thanos-receive-3-data:/thanos/receive-3
       - thanos-object-store-data:/thanos/object-store
       - thanos-store-data:/thanos/store
+      - thanos-compact-data:/thanos/compact
 
   thanos-receive:
     image: quay.io/thanos/thanos:v0.42.4
@@ -234,6 +235,42 @@ services:
       - "10912:10902"
     depends_on:
       thanos-receive-init:
+        condition: service_completed_successfully
+
+  thanos-compact-config:
+    image: python:3.12-alpine
+    command:
+      - python
+      - /app/validate_thanos_retention.py
+      - --raw=${THERMOFORM_THANOS_RETENTION_RAW:-0d}
+      - --five-minutes=${THERMOFORM_THANOS_RETENTION_5M:-0d}
+      - --one-hour=${THERMOFORM_THANOS_RETENTION_1H:-0d}
+    volumes:
+      - ./scripts/validate_thanos_retention.py:/app/validate_thanos_retention.py:ro
+
+  thanos-compact:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - compact
+      - --http-address=0.0.0.0:10902
+      - --data-dir=/thanos/compact
+      - --objstore.config-file=/etc/thanos/object-store.yml
+      - --wait
+      - --wait-interval=5m
+      - --compact.cleanup-interval=5m
+      - --retention.resolution-raw=${THERMOFORM_THANOS_RETENTION_RAW:-0d}
+      - --retention.resolution-5m=${THERMOFORM_THANOS_RETENTION_5M:-0d}
+      - --retention.resolution-1h=${THERMOFORM_THANOS_RETENTION_1H:-0d}
+    volumes:
+      - ${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}:/etc/thanos/object-store.yml:ro
+      - thanos-object-store-data:/thanos/object-store
+      - thanos-compact-data:/thanos/compact
+    ports:
+      - "10913:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+      thanos-compact-config:
         condition: service_completed_successfully
 
   thanos-query:
@@ -354,3 +391,4 @@ volumes:
   thanos-receive-3-data:
   thanos-object-store-data:
   thanos-store-data:
+  thanos-compact-data:

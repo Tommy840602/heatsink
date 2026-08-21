@@ -10,6 +10,7 @@ on:
       - scripts/run_observability_alert_drill.py
       - scripts/render_alertmanager_runtime.py
       - scripts/render_thanos_s3_config.py
+      - scripts/validate_thanos_retention.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
   push:
@@ -23,6 +24,7 @@ on:
       - scripts/run_observability_alert_drill.py
       - scripts/render_alertmanager_runtime.py
       - scripts/render_thanos_s3_config.py
+      - scripts/validate_thanos_retention.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
 
@@ -55,6 +57,17 @@ jobs:
             exit 1
           fi
           THERMOFORM_THANOS_OBJECT_STORE_CONFIG="$runtime_dir/object-store.yml" \
+            docker compose config --quiet
+
+      - name: Validate deletion-safe Compactor retention
+        run: |
+          python scripts/validate_thanos_retention.py \
+            --raw 0d --five-minutes 0d --one-hour 0d
+          python scripts/validate_thanos_retention.py \
+            --raw 365d --five-minutes 365d --one-hour 365d
+          THERMOFORM_THANOS_RETENTION_RAW=365d \
+          THERMOFORM_THANOS_RETENTION_5M=365d \
+          THERMOFORM_THANOS_RETENTION_1H=365d \
             docker compose config --quiet
 
       - name: Validate Prometheus config and rules

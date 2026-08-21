@@ -30,6 +30,7 @@ THANOS_RECEIVE_URL = "http://127.0.0.1:19098"
 THANOS_RECEIVE_2_URL = "http://127.0.0.1:19110"
 THANOS_RECEIVE_3_URL = "http://127.0.0.1:19111"
 THANOS_STORE_URL = "http://127.0.0.1:19112"
+THANOS_COMPACT_URL = "http://127.0.0.1:19113"
 ALERT_NAME = "ThermoformCaeWatchdogMissingDrill"
 RECEIVE_FAILOVER_ALERT_NAME = "ThermoformReceiveFailoverDrill"
 PROMETHEUS_FAILOVER_ALERT_NAME = "ThermoformPrometheusFailoverDrill"
@@ -105,6 +106,7 @@ def metrics_tier_probe():
         f"{THANOS_RECEIVE_2_URL}/-/ready",
         f"{THANOS_RECEIVE_3_URL}/-/ready",
         f"{THANOS_STORE_URL}/-/ready",
+        f"{THANOS_COMPACT_URL}/-/ready",
         f"{THANOS_QUERY_URL}/-/ready",
     )
     for url in urls:

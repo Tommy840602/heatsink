@@ -45,7 +45,7 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 19
+    assert len(dashboard["panels"]) == 20
     expressions = {
         target["expr"]
         for panel in dashboard["panels"]
@@ -63,9 +63,15 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     assert any("alertmanager_cluster_members" in item for item in expressions)
     assert 'sum(up{job="thermoform-prometheus"})' in expressions
     assert any("prometheus_remote_storage_samples_pending" in item for item in expressions)
-    assert 'up{job=~"thermoform-thanos-(receive|query)"}' in expressions
+    assert 'up{job=~"thermoform-thanos-(receive|query|store|compact)"}' in expressions
     assert 'sum(up{job="thermoform-thanos-receive"})' in expressions
     assert 'up{job="thermoform-thanos-store"}' in expressions
+    assert 'sum(up{job="thermoform-thanos-compact"})' in expressions
+    assert any("thanos_compact_halted" in item for item in expressions)
+    assert any(
+        "thanos_compact_group_compactions_failures_total" in item
+        for item in expressions
+    )
     assert any("thanos_objstore_bucket_operation_failures_total" in item for item in expressions)
     assert "prometheus:" in compose
     assert "prometheus-2:" in compose
@@ -118,6 +124,10 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformThanosReceiveReplicaDegraded",
         "ThermoformThanosQueryDown",
         "ThermoformThanosStoreGatewayDown",
+        "ThermoformThanosCompactorDown",
+        "ThermoformThanosCompactorMultipleRunning",
+        "ThermoformThanosCompactorHalted",
+        "ThermoformThanosCompactionFailure",
         "ThermoformThanosObjectStoreFailure",
         "ThermoformRemoteWriteFailure",
         "ThermoformRemoteWriteBacklogHigh",
@@ -208,16 +218,23 @@ def test_prometheus_pair_remote_writes_to_durable_thanos_query_path():
     assert "thanos-receive-3-data:/thanos/receive" in compose
     assert "thanos-object-store-data:/thanos/object-store" in compose
     assert "thanos-store:" in compose
+    assert compose.count("\n  thanos-compact:\n") == 1
+    assert "thanos-compact-data:/thanos/compact" in compose
     assert "quay.io/thanos/thanos:v0.42.4" in compose
     assert compose.count(
         "${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}"
         ":/etc/thanos/object-store.yml:ro"
-    ) == 4
+    ) == 5
+    assert "--retention.resolution-raw=${THERMOFORM_THANOS_RETENTION_RAW:-0d}" in compose
+    assert "--retention.resolution-5m=${THERMOFORM_THANOS_RETENTION_5M:-0d}" in compose
+    assert "--retention.resolution-1h=${THERMOFORM_THANOS_RETENTION_1H:-0d}" in compose
+    assert "scripts/validate_thanos_retention.py" in compose
     assert "--query.replica-label=replica" in compose
     assert "--query.replica-label=receive_replica" in compose
     assert compose.count("--receive.replication-factor=3") == 3
     assert "url: http://thanos-receive:19291/api/v1/receive" in prometheus
     assert "url: http://thanos-receive-2:19291/api/v1/receive" in prometheus
+    assert "job_name: thermoform-thanos-compact" in prometheus
     assert "type: FILESYSTEM" in ROOT.joinpath(
         "infra/thanos/object-store.yml"
     ).read_text(encoding="utf-8")
@@ -228,6 +245,10 @@ def test_prometheus_pair_remote_writes_to_durable_thanos_query_path():
         "ThermoformThanosReceiveReplicaDegraded",
         "ThermoformThanosQueryDown",
         "ThermoformThanosStoreGatewayDown",
+        "ThermoformThanosCompactorDown",
+        "ThermoformThanosCompactorMultipleRunning",
+        "ThermoformThanosCompactorHalted",
+        "ThermoformThanosCompactionFailure",
         "ThermoformThanosObjectStoreFailure",
         "ThermoformRemoteWriteFailure",
         "ThermoformRemoteWriteBacklogHigh",
@@ -251,6 +272,7 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
     assert 'SCHEMA_2_VOLUME_KEYS = (*SCHEMA_1_VOLUME_KEYS, "alertmanager-2-data")' in tool
     assert "SCHEMA_3_VOLUME_KEYS" in tool
     assert '"schema_version": 4' in tool
+    assert "thanos-compact-data" not in tool
     assert "com.docker.compose.project" in tool
     assert "com.docker.compose.volume" in tool
     assert "--confirm-empty-volumes" in tool
@@ -296,6 +318,8 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert "thanos-receive:" in compose
     assert "thanos-query:" in compose
     assert "thanos-store:" in compose
+    assert "thanos-compact:" in compose
+    assert "127.0.0.1:19113:10902" in compose
     assert "ThermoformCaeWatchdogMissingDrill" in rule
     assert "ThermoformAlertmanagerFailoverDrill" in rule
     assert "ThermoformPrometheusFailoverDrill" in rule
@@ -310,6 +334,7 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert "remote_copy_probe" in script
     assert "deduplicated_remote_probe" in script
     assert "PROMETHEUS_2_URL" in script
+    assert "THANOS_COMPACT_URL" in script
     assert '"alertmanager", environment=environment' in script
     assert '"down",' in script
     assert '"--volumes",' in script
@@ -335,5 +360,6 @@ def test_ci_validates_every_observability_configuration():
     assert "python scripts/render_alertmanager_runtime.py" in workflow
     assert "python scripts/run_observability_state_drill.py" in workflow
     assert "python scripts/render_thanos_s3_config.py" in workflow
+    assert "python scripts/validate_thanos_retention.py" in workflow
     assert "THERMOFORM_THANOS_OBJECT_STORE_CONFIG" in workflow
     assert "access_key:|secret_key:|session_token:" in workflow

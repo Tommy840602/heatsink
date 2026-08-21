@@ -76,3 +76,8 @@ scrape_configs:
     static_configs:
       - targets:
           - thanos-store:10902
+
+  - job_name: thermoform-thanos-compact
+    static_configs:
+      - targets:
+          - thanos-compact:10902

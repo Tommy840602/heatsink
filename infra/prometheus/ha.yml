@@ -72,8 +72,64 @@ groups:
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosstoregatewaydown
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
+      - alert: ThermoformThanosCompactorDown
+        expr: up{job="thermoform-thanos-compact"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: object-store-maintenance
+          team: thermal-platform
+        annotations:
+          summary: The singleton Thanos Compactor is unreachable
+          description: Writes and queries continue, but block compaction, downsampling, and configured retention are suspended.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanoscompactordown
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformThanosCompactorMultipleRunning
+        expr: sum(up{job="thermoform-thanos-compact"}) > 1
+        for: 5m
+        labels:
+          severity: critical
+          service: thermoform-cae
+          component: object-store-maintenance
+          team: thermal-platform
+        annotations:
+          summary: Multiple Thanos Compactors are running against one bucket
+          description: Compactor is not concurrency safe; stop duplicate instances before they mutate overlapping bucket state.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanoscompactormultiplerunning
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformThanosCompactorHalted
+        expr: thanos_compact_halted{job="thermoform-thanos-compact"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: thermoform-cae
+          component: object-store-maintenance
+          team: thermal-platform
+        annotations:
+          summary: The Thanos Compactor halted after an unrecoverable error
+          description: Compaction, downsampling, and retention have stopped; preserve the bucket and diagnose the halt before restarting.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanoscompactorhalted
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformThanosCompactionFailure
+        expr: sum(increase(thanos_compact_group_compactions_failures_total{job="thermoform-thanos-compact"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: object-store-maintenance
+          team: thermal-platform
+        annotations:
+          summary: Thanos block compaction is failing
+          description: At least one compaction group failed during the last fifteen minutes; retention may not be enforced while failures continue.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanoscompactionfailure
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
       - alert: ThermoformThanosObjectStoreFailure
-        expr: sum(increase(thanos_objstore_bucket_operation_failures_total{job=~"thermoform-thanos-(receive|store)"}[10m])) > 0
+        expr: sum(increase(thanos_objstore_bucket_operation_failures_total{job=~"thermoform-thanos-(receive|store|compact)"}[10m])) > 0
         for: 1m
         labels:
           severity: warning
@@ -82,7 +138,7 @@ groups:
           team: thermal-platform
         annotations:
           summary: A Thanos object-store operation failed
-          description: Receive upload or Store Gateway access to the configured long-term block path failed during the last ten minutes.
+          description: Receive, Store Gateway, or Compactor access to the configured long-term block path failed during the last ten minutes.
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformthanosobjectstorefailure
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 

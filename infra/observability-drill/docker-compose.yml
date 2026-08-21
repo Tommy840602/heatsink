@@ -73,13 +73,14 @@ services:
     command:
       - sh
       - -c
-      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store
+      - chown -R 1001:1001 /thanos/receive-1 /thanos/receive-2 /thanos/receive-3 /thanos/object-store /thanos/store /thanos/compact
     volumes:
       - thanos-receive-data:/thanos/receive-1
       - thanos-receive-2-data:/thanos/receive-2
       - thanos-receive-3-data:/thanos/receive-3
       - thanos-object-store-data:/thanos/object-store
       - thanos-store-data:/thanos/store
+      - thanos-compact-data:/thanos/compact
 
   thanos-receive:
     image: quay.io/thanos/thanos:v0.42.4
@@ -187,6 +188,29 @@ services:
       thanos-receive-init:
         condition: service_completed_successfully
 
+  thanos-compact:
+    image: quay.io/thanos/thanos:v0.42.4
+    command:
+      - compact
+      - --http-address=0.0.0.0:10902
+      - --data-dir=/thanos/compact
+      - --objstore.config-file=/etc/thanos/object-store.yml
+      - --wait
+      - --wait-interval=5m
+      - --compact.cleanup-interval=5m
+      - --retention.resolution-raw=0d
+      - --retention.resolution-5m=0d
+      - --retention.resolution-1h=0d
+    volumes:
+      - ../thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - thanos-object-store-data:/thanos/object-store
+      - thanos-compact-data:/thanos/compact
+    ports:
+      - "127.0.0.1:19113:10902"
+    depends_on:
+      thanos-receive-init:
+        condition: service_completed_successfully
+
   thanos-query:
     image: quay.io/thanos/thanos:v0.42.4
     command:
@@ -250,3 +274,4 @@ volumes:
   thanos-receive-3-data:
   thanos-object-store-data:
   thanos-store-data:
+  thanos-compact-data:

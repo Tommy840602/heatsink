@@ -238,7 +238,7 @@
       "id": 17,
       "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "textMode": "auto" },
       "targets": [
-        { "expr": "up{job=~\"thermoform-thanos-(receive|query)\"}", "legendFormat": "{{job}}", "refId": "A" }
+        { "expr": "up{job=~\"thermoform-thanos-(receive|query|store|compact)\"}", "legendFormat": "{{job}}", "refId": "A" }
       ],
       "title": "Thanos service availability",
       "type": "stat"
@@ -261,9 +261,23 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         { "expr": "up{job=\"thermoform-thanos-store\"}", "legendFormat": "Store Gateway", "refId": "A" },
-        { "expr": "sum(increase(thanos_objstore_bucket_operation_failures_total{job=~\"thermoform-thanos-(receive|store)\"}[1h]))", "legendFormat": "object-store failures / 1h", "refId": "B" }
+        { "expr": "sum(increase(thanos_objstore_bucket_operation_failures_total{job=~\"thermoform-thanos-(receive|store|compact)\"}[1h]))", "legendFormat": "object-store failures / 1h", "refId": "B" }
       ],
       "title": "Object-store query path",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 53 },
+      "id": 20,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "sum(up{job=\"thermoform-thanos-compact\"})", "legendFormat": "Compactors available (must be 1)", "refId": "A" },
+        { "expr": "max(thanos_compact_halted{job=\"thermoform-thanos-compact\"})", "legendFormat": "halted", "refId": "B" },
+        { "expr": "sum(increase(thanos_compact_group_compactions_failures_total{job=\"thermoform-thanos-compact\"}[1h]))", "legendFormat": "failed groups / 1h", "refId": "C" }
+      ],
+      "title": "Compactor lifecycle",
       "type": "timeseries"
     }
   ],
@@ -286,5 +300,5 @@
   "timezone": "browser",
   "title": "CAE Resume Observability",
   "uid": "thermoform-cae-resume",
-  "version": 7
+  "version": 8
 }

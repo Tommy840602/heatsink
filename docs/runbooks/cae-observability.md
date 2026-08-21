@@ -201,9 +201,41 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 2. Do not treat successful current queries as historical recovery; query a known timestamp that exists only in a shipped block.
 3. Restart Store Gateway and verify it discovers the expected block count before resolving.
 
+## ThermoformThanosCompactorDown
+
+**Impact:** writes and queries continue, but compaction, downsampling, deletion-mark cleanup, and configured retention are suspended.
+
+1. Confirm that exactly one Compactor is assigned to the bucket and inspect its readiness endpoint and logs.
+2. Check scratch-volume capacity and permissions plus bucket list/read/write/delete access through the Compactor workload identity.
+3. Restart only after preserving logs and bucket state; verify `up{job="thermoform-thanos-compact"}` returns to one.
+
+## ThermoformThanosCompactorMultipleRunning
+
+**Impact:** more than one Compactor is mutating the same bucket even though its compaction and deletion operations are not concurrency safe.
+
+1. Freeze rollouts and ad-hoc maintenance jobs; identify every Compactor workload and the exact bucket/prefix each one uses.
+2. Preserve the designated singleton and stop duplicates gracefully. Do not delete bucket objects while resolving the overlap.
+3. Inspect all instance logs and run read-only bucket verification before resuming lifecycle changes; confirm the availability sum is exactly one.
+
+## ThermoformThanosCompactorHalted
+
+**Impact:** Compactor encountered an unrecoverable block condition and deliberately stopped lifecycle processing. Restarting without diagnosis can reproduce the halt.
+
+1. Preserve the bucket, Compactor logs, and affected block IDs. Never start a second Compactor against the same bucket.
+2. Inspect overlap, malformed index, partial upload, and deletion-mark evidence with read-only `thanos tools bucket verify` or `inspect` commands.
+3. Repair or quarantine blocks only through a reviewed Thanos procedure, then restart the singleton and verify `thanos_compact_halted` remains zero.
+
+## ThermoformThanosCompactionFailure
+
+**Impact:** one or more compaction groups are repeatedly failing, so object growth and retention enforcement can diverge from policy.
+
+1. Break down `thanos_compact_group_compactions_failures_total` by group and correlate it with bucket-operation failures.
+2. Check local scratch capacity, network/KMS permissions, and the source blocks named in Compactor logs.
+3. Close only after a complete successful loop and a stable Store Gateway historical query.
+
 ## ThermoformThanosObjectStoreFailure
 
-**Impact:** a Receive upload or Store Gateway read/list operation failed. Local receiver TSDBs may mask the problem until retention removes those blocks.
+**Impact:** a Receive upload, Store Gateway read/list, or Compactor lifecycle operation failed. Local receiver TSDBs may mask the problem until retention removes those blocks.
 
 1. Break down `thanos_objstore_bucket_operation_failures_total` by job, instance, and operation.
 2. Check the configured bucket path, ownership, capacity, consistency, and Store Gateway synchronization logs.
@@ -226,9 +258,9 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## Offline backup and restore
 
-The backup tool covers both Prometheus volumes, both Alertmanager volumes, all three Receive TSDB volumes, and `thanos-object-store-data`. Store Gateway cache is excluded because it is rebuilt from the bucket. The tool refuses any covered volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema 1–3 backups remain restorable; newly introduced volumes start empty and converge or rebuild after startup.
+The backup tool covers both Prometheus volumes, both Alertmanager volumes, all three Receive TSDB volumes, and `thanos-object-store-data`. Store Gateway cache and Compactor scratch data are excluded because they are rebuilt from the bucket. The tool refuses any covered volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema 1–3 backups remain restorable; newly introduced volumes start empty and converge or rebuild after startup.
 
-1. Identify the exact Compose project with `docker compose ls` and stop both Prometheus replicas, both Alertmanagers, all three Receive ingesters, and `thanos-store` gracefully.
+1. Identify the exact Compose project with `docker compose ls` and stop both Prometheus replicas, both Alertmanagers, all three Receive ingesters, `thanos-store`, and `thanos-compact` gracefully.
 2. Run `python scripts/observability_state.py backup --project-name <project> --output-dir <new-backup-directory>`.
 3. Start the services again immediately after backup and copy the backup directory to durable storage.
 4. For recovery, preserve or quarantine damaged volumes and let Compose create empty replacements with the same project labels. The tool never deletes or overwrites existing state.
@@ -255,18 +287,29 @@ All Prometheus, Receive, Store Gateway, and filesystem bucket volumes still shar
 
 ## Production S3 cutover
 
-The checked-in `infra/thanos/object-store.yml` remains a local/CI filesystem adapter. A production cutover is complete only when every Receive ingester and Store Gateway uses the same remote bucket and prefix.
+The checked-in `infra/thanos/object-store.yml` remains a local/CI filesystem adapter. A production cutover is complete only when every Receive ingester, Store Gateway, and the singleton Compactor uses the same remote bucket and prefix.
 
 1. Provision a strongly consistent bucket with versioning, encryption, capacity alerts, and an explicitly reviewed lifecycle policy. Do not enable expiration that is shorter than the required metrics retention.
-2. Assign workload identities rather than static keys. Receive needs the reviewed write/list/read permissions for block shipping; Store Gateway should use a separate read/list-only identity when the deployment platform separates the processes. Add KMS permissions only when SSE-KMS is selected.
+2. Assign workload identities rather than static keys. Receive needs reviewed write/list/read permissions for block shipping, Store Gateway should use read/list-only access, and only the singleton Compactor identity should receive delete permission. Add KMS permissions only when SSE-KMS is selected.
 3. Render `.runtime/thanos/object-store.yml` with `scripts/render_thanos_s3_config.py`. Confirm `aws_sdk_auth: true`, `insecure: false`, `signature_version2: false`, and the expected SSE mode; reject any file containing `access_key`, `secret_key`, or `session_token`.
-4. Set `THERMOFORM_THANOS_OBJECT_STORE_CONFIG` and run `docker compose config --quiet`. Confirm all three Receive services and Store Gateway mount the same resolved file at `/etc/thanos/object-store.yml`.
+4. Set `THERMOFORM_THANOS_OBJECT_STORE_CONFIG` and run `docker compose config --quiet`. Confirm all three Receive services, Store Gateway, and Compactor mount the same resolved file at `/etc/thanos/object-store.yml`.
 5. From the same workload identity and network path, use `thanos tools bucket ls --objstore.config-file=<runtime-file>` to prove list access. Use a disposable prefix or controlled block to prove write/read before changing the live clients.
 6. Plan migration of existing filesystem blocks separately. Switching configuration does not copy historical blocks; retain the old volume until a known old timestamp is queryable through Store Gateway from S3.
-7. Apply the new configuration to all four clients in one maintenance change. Mixed bucket/prefix configurations split block history and are not an acceptable steady state.
+7. Apply the new configuration to all five clients in one maintenance change. Mixed bucket/prefix configurations split block history and are not an acceptable steady state.
 8. Verify Receive upload metrics, Store Gateway synchronization, a historical-only query, `ThermoformThanosObjectStoreFailure`, and rollback access to the preserved filesystem data.
 
-The schema-4 offline tool protects the local filesystem bucket only. It is not a backup of S3. Provider versioning, replication, restore testing, and lifecycle controls own remote-bucket durability. This phase does not deploy Thanos Compactor; block compaction, downsampling, and deletion retention must be designed before claiming a complete production long-term-storage lifecycle.
+The schema-4 offline tool protects the local filesystem bucket only. It is not a backup of S3. Provider versioning, replication, and restore testing own remote-bucket durability.
+
+## Thanos Compactor retention and lifecycle
+
+Compactor is a singleton for one bucket and is the only component authorized to delete current Thanos block objects. The Compose defaults retain samples indefinitely: raw, 5-minute, and 1-hour retention are all `0d`. Normal compaction may still replace source blocks while preserving their logical samples.
+
+1. Before enabling deletion, choose one retention period of at least 10 days and apply it equally to `THERMOFORM_THANOS_RETENTION_RAW`, `THERMOFORM_THANOS_RETENTION_5M`, and `THERMOFORM_THANOS_RETENTION_1H`. Validate it with `scripts/validate_thanos_retention.py`; the startup guard rejects mismatched, ambiguous, or too-short values.
+2. Preserve one Compactor instance across every rollout. Do not use horizontal autoscaling or run an ad-hoc Compactor against the live bucket.
+3. Allow Compactor local scratch space for downloading and rewriting blocks. `thanos-compact-data` is rebuildable scratch state and is intentionally excluded from offline backups.
+4. Do not configure provider lifecycle rules to expire current Thanos block objects. Lifecycle automation may abort incomplete multipart uploads and expire noncurrent versions only after the reviewed recovery window; Compactor owns current-object retention.
+5. Change retention only through a reviewed maintenance change. Reducing it causes irreversible object deletion after blocks completely age out, and failed compaction/downsampling loops prevent retention from running.
+6. After rollout, verify Compactor readiness, `thanos_compact_halted == 0`, no new compaction failures, Store Gateway synchronization, and both raw and downsampled historical queries.
 
 ## Alertmanager HA failover
 
@@ -289,7 +332,7 @@ The Compose peers share one host and an unencrypted private Docker network. A cr
 
 ## Recovery verification
 
-- Both Prometheus replicas target the API, both Alertmanagers, three Receive ingesters, Query, and Store Gateway; all twenty-four alert rules are loaded.
+- Both Prometheus replicas target the API, both Alertmanagers, three Receive ingesters, Query, Store Gateway, and Compactor; all twenty-eight alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.
