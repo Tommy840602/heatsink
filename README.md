@@ -36,6 +36,8 @@ Phase 3.14 reconciles durable resume history with RQ after worker or Redis job-r
 
 Phase 3.15 removes the browser dependency from that recovery path. Resume workers maintain an atomic durable heartbeat every 30 seconds while OpenFOAM runs, and an RQ Cron scheduler enqueues the watchdog on the general worker every minute. The watchdog reconciles heartbeat leases, RQ state, immutable successor reports, and lifecycle events, then persists its own immutable report. React shows both its immediate reconciliation result and the last server-scheduled audit.
 
+Phase 3.16 adds durable CAE recovery observability. FastAPI derives low-cardinality Prometheus metrics from shared resume, heartbeat, event, and watchdog artifacts, so process restarts do not erase the monitoring state. Prometheus evaluates alerts for a missing or stale watchdog, stale worker heartbeats, orphan repairs, and failed retries; a provisioned Grafana dashboard and the React CAE Operations panel expose the same health contract.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -47,6 +49,8 @@ Browser
             └─ FastAPI backend (:8000)
                  ├─ Redis job queue → isolated RQ worker
                  ├─ RQ Cron watchdog → durable resume heartbeat audit
+                 ├─ Prometheus metrics + CAE recovery alerts (:9090)
+                 ├─ provisioned Grafana recovery dashboard (:3001)
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
                  ├─ quadratic RSM, ANOVA, and residual diagnostics
@@ -79,8 +83,11 @@ docker compose --profile cae up --build
 - Frontend: http://localhost:3000
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001 (`admin` / `thermoform` for local development)
 - Redis and the RQ worker run as internal Compose services.
 - The watchdog service schedules server-side resume reconciliation every 60 seconds; it does not wait for a browser session.
+- Prometheus scrapes durable CAE recovery metrics every 15 seconds. Grafana opens with the `CAE Resume Observability` dashboard provisioned; alert rules are visible in Prometheus, while production notifications require an Alertmanager receiver.
 - The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
 ## Local development
@@ -135,6 +142,8 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `GET` | `/api/v1/cae/resume-attempts` | List durable resume dispatches with parent, checkpoint, successor, and completion state |
 | `POST` | `/api/v1/cae/resume-attempts/reconcile` | Repair missing terminal events from RQ state and mark stale missing jobs as orphaned failures |
 | `GET` | `/api/v1/cae/resume-watchdog` | Read the latest immutable server-scheduled reconciliation report |
+| `GET` | `/api/v1/cae/observability` | Read the React-facing durable watchdog, heartbeat, retry, and orphan-repair health snapshot |
+| `GET` | `/metrics` | Scrape low-cardinality Prometheus metrics derived from durable CAE recovery artifacts |
 | `POST` | `/api/v1/cae/resume-attempts/{resume_attempt_id}/retry` | Retry one terminal failed attempt with preserved checkpoint settings and new lineage |
 | `GET` | `/api/v1/cae/mesh-studies` | List newest-first mesh-independence study summaries |
 | `GET` | `/api/v1/cae/mesh-studies/{mesh_study_id}` | Load one full mesh-independence report |
@@ -173,6 +182,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - CAE Operations reconciles nonterminal durable attempts before each history restore. RQ `finished`, `failed`, and cancelled snapshots repair missing terminal events; live queue states are never rewritten, while missing jobs must exceed both the configured grace floor and their total-runtime + final-segment + safety-buffer window before becoming retryable orphaned failures.
 - Each resumed worker atomically replaces `resume-heartbeat.json` from a dedicated heartbeat thread, so a long solver segment remains distinguishable from a dead worker even if its RQ job record disappears. Terminal events remain append-only and authoritative.
 - `rq cron app.cron_config` schedules `run_resume_watchdog` on the general `thermoform` queue. Every run writes one immutable `resume-watchdog-report.json`; CAE Operations displays the latest scheduled audit separately from its on-open reconciliation.
+- FastAPI derives `/metrics` and `/api/v1/cae/observability` from the shared artifact volume rather than process-local counters. Prometheus alert rules cover API availability, watchdog presence/age, heartbeat leases, orphan repair increments, and failed retries; React shows the same snapshot without parsing Prometheus text.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

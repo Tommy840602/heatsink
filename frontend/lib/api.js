@@ -161,6 +161,7 @@ export const api = {
       { method: "POST" },
     ),
   getCaeResumeWatchdog: () => request("/cae/resume-watchdog"),
+  getCaeObservability: () => request("/cae/observability"),
   retryCaeResumeAttempt: (attemptId) =>
     request(`/cae/resume-attempts/${attemptId}/retry`, {
       method: "POST",

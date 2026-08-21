@@ -536,6 +536,48 @@
   padding-left: 7px;
 }
 
+.resume-observability-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 7px 8px;
+  border: 1px solid #dce5e1;
+  background: #f4f8f6;
+  color: #72807a;
+  font-size: 7px;
+}
+
+.resume-observability-status strong {
+  margin-right: auto;
+  color: #737d79;
+  font-size: 6px;
+  letter-spacing: 0.6px;
+}
+
+.resume-observability-status b {
+  color: var(--green);
+  font-size: 6px;
+  letter-spacing: 0.5px;
+}
+
+.resume-observability-status.degraded,
+.resume-observability-status.unknown {
+  border-color: #efd9c8;
+  background: #fff9f2;
+}
+
+.resume-observability-status.degraded b,
+.resume-observability-status.unknown b {
+  color: #b86b37;
+}
+
+.resume-observability-status time {
+  color: #89918e;
+  font-size: 6px;
+}
+
 .resume-watchdog-status {
   display: flex;
   align-items: center;

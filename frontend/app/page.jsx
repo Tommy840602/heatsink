@@ -301,6 +301,7 @@ function ModuleView({
   const [resumeHistory, setResumeHistory] = useState([]);
   const [resumeReconciliation, setResumeReconciliation] = useState(null);
   const [resumeWatchdog, setResumeWatchdog] = useState(null);
+  const [caeObservability, setCaeObservability] = useState(null);
   const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
   const [resumeChecking, setResumeChecking] = useState(false);
   const [resumePreview, setResumePreview] = useState(null);
@@ -615,11 +616,12 @@ function ModuleView({
       setResumeReconciliation(null);
     }
     try {
-      const [campaignIndex, studyIndex, resumeIndex, watchdogIndex] = await Promise.all([
+      const [campaignIndex, studyIndex, resumeIndex, watchdogIndex, observability] = await Promise.all([
         api.listCaeCampaigns(),
         api.listMeshStudies(),
         api.listCaeResumeAttempts(),
         api.getCaeResumeWatchdog(),
+        api.getCaeObservability(),
       ]);
       const summaries = campaignIndex.campaigns ?? [];
       const studies = studyIndex.mesh_studies ?? [];
@@ -628,6 +630,7 @@ function ModuleView({
       setMeshStudyHistory(studies);
       setResumeHistory(attempts);
       setResumeWatchdog(watchdogIndex.watchdog ?? null);
+      setCaeObservability(observability);
 
       const newestByProfile = {};
       for (const summary of summaries) {
@@ -1946,6 +1949,20 @@ function ModuleView({
                 <span>{resumeReconciliation.reconciled} repaired</span>
                 <span>{resumeReconciliation.active} active</span>
                 <span>{resumeReconciliation.pending_grace} in grace period</span>
+              </div>
+            )}
+            {caeObservability && (
+              <div className={`resume-observability-status ${caeObservability.status}`}>
+                <strong>PROMETHEUS HEALTH</strong>
+                <b>{caeObservability.status.toUpperCase()}</b>
+                <span>{caeObservability.heartbeats.stale} stale heartbeats</span>
+                <span>{caeObservability.attempts.orphan_repairs} orphan repairs</span>
+                <span>{caeObservability.attempts.failed_retries} failed retries</span>
+                <time dateTime={caeObservability.watchdog.checked_at ?? undefined}>
+                  {caeObservability.watchdog.present
+                    ? `Watchdog ${Math.round(caeObservability.watchdog.age_seconds ?? 0)}s old`
+                    : "Watchdog missing"}
+                </time>
               </div>
             )}
             {resumeWatchdog && (

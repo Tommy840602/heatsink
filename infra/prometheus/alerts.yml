@@ -1,0 +1,56 @@
+groups:
+  - name: thermoform-cae-resume
+    rules:
+      - alert: ThermoformCaeApiDown
+        expr: up{job="thermoform-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Thermoform metrics endpoint is unreachable
+          description: Prometheus has not been able to scrape the FastAPI service for one minute.
+
+      - alert: ThermoformCaeWatchdogMissing
+        expr: thermoform_cae_watchdog_present == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: CAE resume watchdog has not published an audit
+          description: No durable watchdog report is visible to FastAPI after the scheduler startup window.
+
+      - alert: ThermoformCaeWatchdogStale
+        expr: thermoform_cae_watchdog_present == 1 and thermoform_cae_watchdog_age_seconds > 180
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: CAE resume watchdog audit is stale
+          description: The newest durable watchdog report is more than three minutes old.
+
+      - alert: ThermoformCaeResumeHeartbeatStale
+        expr: thermoform_cae_resume_stale_heartbeats > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A CAE resume worker heartbeat is stale
+          description: At least one active resume heartbeat has exceeded its durable lease.
+
+      - alert: ThermoformCaeOrphanRepairDetected
+        expr: thermoform_cae_watchdog_last_orphan_repairs > 0
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: The watchdog repaired an orphaned CAE resume attempt
+          description: The latest watchdog audit converted a missing RQ job to a durable failed event eligible for controlled retry.
+
+      - alert: ThermoformCaeRetryFailed
+        expr: thermoform_cae_resume_failed_retry_attempts > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A controlled CAE resume retry remains failed
+          description: At least one durable retry attempt is in the failed lifecycle state.

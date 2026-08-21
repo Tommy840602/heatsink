@@ -8,6 +8,7 @@ from app.api.phase1 import router as phase1_router
 from app.api.phase2 import router as phase2_router
 from app.api.jobs import router as jobs_router
 from app.api.cae import router as cae_router
+from app.api.metrics import router as metrics_router
 
 
 app = FastAPI(
@@ -29,6 +30,7 @@ app.include_router(phase1_router)
 app.include_router(phase2_router)
 app.include_router(jobs_router)
 app.include_router(cae_router)
+app.include_router(metrics_router)
 
 
 @app.get("/")

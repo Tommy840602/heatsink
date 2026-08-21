@@ -17,6 +17,8 @@ services:
       THERMOFORM_CORS_ORIGINS: http://localhost:3000
       THERMOFORM_REDIS_URL: redis://redis:6379/0
       THERMOFORM_ARTIFACT_DIR: /data
+      THERMOFORM_HEARTBEAT_STALE_SECONDS: 120
+      THERMOFORM_WATCHDOG_STALE_SECONDS: 180
     volumes:
       - thermoform-artifacts:/data
     ports:
@@ -50,9 +52,41 @@ services:
       THERMOFORM_ARTIFACT_DIR: /data
       THERMOFORM_WATCHDOG_INTERVAL_SECONDS: 60
       THERMOFORM_WATCHDOG_GRACE_SECONDS: 900
+    volumes:
+      - thermoform-artifacts:/data
     depends_on:
       redis:
         condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.5.5
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:12.4.8
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: thermoform
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
 
   cae-worker:
     profiles: ["cae"]
@@ -90,3 +124,5 @@ services:
 volumes:
   redis-data:
   thermoform-artifacts:
+  prometheus-data:
+  grafana-data:
