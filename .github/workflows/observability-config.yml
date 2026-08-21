@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/observability-config.yml
+      - .github/workflows/terraform-production-plan.yml
       - docker-compose.yml
       - infra/**
       - docs/runbooks/cae-observability.md
@@ -16,6 +17,9 @@ on:
       - scripts/preflight_eks_thanos.py
       - scripts/run_eks_thanos_staging_drill.py
       - scripts/validate_terraform_thanos.py
+      - scripts/validate_production_plan_contract.py
+      - scripts/validate_production_plan_inputs.py
+      - scripts/summarize_terraform_plan.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
   push:
@@ -23,6 +27,7 @@ on:
       - main
     paths:
       - .github/workflows/observability-config.yml
+      - .github/workflows/terraform-production-plan.yml
       - docker-compose.yml
       - infra/**
       - docs/runbooks/cae-observability.md
@@ -35,6 +40,9 @@ on:
       - scripts/preflight_eks_thanos.py
       - scripts/run_eks_thanos_staging_drill.py
       - scripts/validate_terraform_thanos.py
+      - scripts/validate_production_plan_contract.py
+      - scripts/validate_production_plan_inputs.py
+      - scripts/summarize_terraform_plan.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
 
@@ -91,23 +99,32 @@ jobs:
             "$runtime_dir/eks-production.yml"
           python -m compileall -q scripts/preflight_eks_thanos.py
 
-      - name: Validate AWS storage and IRSA Terraform module
+      - name: Validate production Terraform root and module
         run: |
-          module_dir="$PWD/infra/terraform/modules/aws-thanos-storage"
+          terraform_dir="$PWD/infra/terraform"
           docker run --rm \
-            -v "$module_dir:/work:ro" -w /work \
-            hashicorp/terraform:1.15.8 fmt -check -diff
+            -v "$terraform_dir:/work:ro" -w /work \
+            hashicorp/terraform:1.15.8 fmt -check -diff -recursive
           runtime_dir="$(mktemp -d)"
-          cp "$module_dir"/*.tf "$runtime_dir"/
+          cp -R "$terraform_dir" "$runtime_dir/terraform"
           docker run --rm \
-            -v "$runtime_dir:/work" -w /work \
+            -v "$runtime_dir/terraform:/work" \
+            -w /work/environments/production \
             hashicorp/terraform:1.15.8 \
             init -backend=false -input=false
           docker run --rm \
-            -v "$runtime_dir:/work" -w /work \
+            -v "$runtime_dir/terraform:/work" \
+            -w /work/environments/production \
             hashicorp/terraform:1.15.8 validate
-          python scripts/validate_terraform_thanos.py "$module_dir"
-          python -m compileall -q scripts/run_eks_thanos_staging_drill.py
+          python scripts/validate_terraform_thanos.py \
+            "$terraform_dir/modules/aws-thanos-storage"
+          python scripts/validate_production_plan_contract.py \
+            "$terraform_dir/environments/production" \
+            .github/workflows/terraform-production-plan.yml
+          python -m compileall -q \
+            scripts/run_eks_thanos_staging_drill.py \
+            scripts/validate_production_plan_inputs.py \
+            scripts/summarize_terraform_plan.py
 
       - name: Render credential-free production S3 configuration
         run: |

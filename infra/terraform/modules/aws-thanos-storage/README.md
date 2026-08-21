@@ -8,7 +8,7 @@ This Terraform module creates the AWS resources consumed by the EKS Thanos overl
 - prefix-scoped S3 and KMS policies with delete reserved for Compactor;
 - lifecycle cleanup for incomplete multipart uploads and old noncurrent versions only.
 
-It deliberately creates no EKS cluster, Kubernetes object, static credential, current-object expiration, replication bucket, CloudTrail, or Terraform backend. Consume it from an environment root that already has reviewed remote state, AWS provider configuration, approvals, and account guardrails.
+It deliberately creates no EKS cluster, Kubernetes object, static credential, current-object expiration, replication bucket, CloudTrail, or Terraform backend. The reviewed production consumer is `../../environments/production`; any other environment root must supply equivalent remote state, AWS provider configuration, approvals, and account guardrails.
 
 ## Example root configuration
 

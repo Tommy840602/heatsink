@@ -62,6 +62,8 @@ Phase 3.27 makes that production contract deployable on standard Amazon EKS mana
 
 Phase 3.28 adds the AWS infrastructure contract behind that overlay. A Terraform 1.15 module provisions a private, versioned, TLS-only S3 bucket, a rotation-enabled KMS key, and three exact-subject IRSA roles; prefix-scoped policy reserves object deletion for Compactor. Both state-owning resources prevent accidental destruction, while lifecycle automation touches only incomplete multipart uploads and noncurrent versions after a 30-day minimum recovery window. A guarded staging drill is read-only by default and requires exact context/node confirmation before it cordons one Receive node, performs a PDB-aware Eviction API request, verifies same-zone EBS rescheduling, and always uncordons the node. CI validates Terraform without AWS credentials and never runs plan or apply.
 
+Phase 3.29 adds the production Terraform root and a manual, plan-only GitHub Environment gate. Remote state uses a separately bootstrapped encrypted S3 backend with native lockfiles; the committed provider lock and AWS provider account allowlist make dependency or account drift fail closed. GitHub OIDC issues a short-lived session only after `production-plan` approval and exact `main` commit confirmation. The workflow rejects deletes, replacements, plans over 50 changes, and lock-file drift, prints only resource addresses/actions, uploads no plan artifact, and always removes temporary plan files. CI validates this contract without AWS credentials; there is still no production apply path.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture

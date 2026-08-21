@@ -343,15 +343,16 @@ Use `infra/kubernetes/overlays/aws-eks` only with standard EKS managed nodes and
 
 ### Terraform infrastructure gate
 
-`infra/terraform/modules/aws-thanos-storage` creates the bucket, KMS key, and three IRSA roles. It is a reusable module, not a production Terraform root.
+`infra/terraform/environments/production` consumes the AWS storage module. Its backend uses an independently bootstrapped encrypted/versioned S3 bucket and native `.tflock` locking; state and Thanos data must use different buckets. Follow the environment README for the exact bootstrap permissions and GitHub settings.
 
-1. Consume it from an environment root with encrypted remote state, state locking, a pinned dependency lock file, an explicit AWS account/region guard, and the normal plan approval workflow.
-2. Run Terraform 1.15.8 formatting and validation plus `scripts/validate_terraform_thanos.py`. Validation uses no AWS credentials; a real plan requires the approved deployment identity.
-3. Review a saved plan. Existing bucket or KMS replacement is a stop condition. Both resources use `prevent_destroy`, and the bucket also has `force_destroy = false`.
-4. Confirm all public-access blocks, BucketOwnerEnforced ownership, versioning, KMS default encryption, bucket keys, and the TLS deny policy.
-5. Confirm current objects have no S3 expiration. Only incomplete multipart uploads and noncurrent versions older than the reviewed recovery window may be deleted by lifecycle automation.
-6. Confirm Receive has list/get/put without delete, Store has list/get only, and Compactor alone has list/get/put/delete. Every role trust must use exact `aud` and `sub` equality for its ServiceAccount.
-7. After apply, feed Terraform outputs into the S3 and EKS renderers. Never copy Terraform credentials, state, or plan artifacts into `.runtime` or Git.
+1. Protect the GitHub `production-plan` Environment with required reviewers, self-review prevention where available, and deployment restricted to protected `main`. Its OIDC role trust must use audience `sts.amazonaws.com` and the exact `repo:<owner>/<repository>:environment:production-plan` subject.
+2. Configure only Environment variables; store no access key. The plan role may operate the exact state and lock objects and read the managed AWS resources, but must not create, update, or delete IAM, KMS, or Thanos S3 resources.
+3. Run Terraform 1.15.8 formatting/validation and both Terraform contract validators locally or in CI. These checks use no AWS credentials.
+4. Dispatch `Production Terraform plan` from `main`, enter that exact 40-character commit SHA, select `PLAN_ONLY`, and approve the Environment deployment. Any ref, SHA, account, region, role, bucket, prefix, or OIDC mismatch fails before AWS authentication.
+5. Review the value-free job summary. Delete, replacement, dependency-lock drift, and more than 50 changed resources are stop conditions. The workflow has no apply step, uploads no saved plan, and removes its temporary binary plan, JSON, and log even after failure.
+6. Confirm all public-access blocks, BucketOwnerEnforced ownership, versioning, KMS default encryption, bucket keys, TLS deny, `prevent_destroy`, and `force_destroy = false` remain in the plan.
+7. Confirm current objects have no S3 expiration. Receive has list/get/put without delete, Store has list/get only, and Compactor alone has list/get/put/delete; every IRSA trust uses exact `aud` and `sub` equality.
+8. Treat this plan as review evidence only. Applying it requires a future separately reviewed role, workflow, approval policy, and explicit change authorization. After an authorized apply exists, feed outputs into the S3 and EKS renderers; never copy credentials, state, or plan files into `.runtime` or Git.
 
 ### Targeted staging eviction drill
 
