@@ -158,6 +158,8 @@ def upload_object_store_fixture(fixture_dir):
     docker(
         "run",
         "--rm",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
         "--entrypoint",
         "promtool",
         "--volume",
