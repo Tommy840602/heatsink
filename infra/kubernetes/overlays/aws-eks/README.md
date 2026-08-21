@@ -78,3 +78,5 @@ kubectl --context <eks-context> -n thermoform-observability \
 Before sending production remote write, inspect the Pods for injected `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`, verify each role ARN matches its ServiceAccount, and run a read-only bucket listing through each workload. Test denied write/delete permissions only against a disposable prefix and never against live Thanos blocks.
 
 Do not treat a successful render as a successful cloud deployment. The production gate additionally requires the three-zone placement, one-node drain drill, recent and historical queries, remote-write backlog recovery, and Compactor singleton checks in the observability runbook.
+
+The AWS resources and least-privilege role policies can be created by the reviewed [`../../../terraform/modules/aws-thanos-storage`](../../../terraform/modules/aws-thanos-storage/README.md) module. Consume it from an environment root with remote state and an approval workflow; do not run the module directory itself as a production root.

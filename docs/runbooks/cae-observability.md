@@ -341,6 +341,43 @@ Use `infra/kubernetes/overlays/aws-eks` only with standard EKS managed nodes and
 5. Create the credential-free object-store Secret before applying workloads. After admission, verify each bucket client received the expected web-identity environment and Query received none.
 6. Complete the general Kubernetes rollout, node-drain, query, remote-write recovery, and Compactor checks above before enabling production traffic.
 
+### Terraform infrastructure gate
+
+`infra/terraform/modules/aws-thanos-storage` creates the bucket, KMS key, and three IRSA roles. It is a reusable module, not a production Terraform root.
+
+1. Consume it from an environment root with encrypted remote state, state locking, a pinned dependency lock file, an explicit AWS account/region guard, and the normal plan approval workflow.
+2. Run Terraform 1.15.8 formatting and validation plus `scripts/validate_terraform_thanos.py`. Validation uses no AWS credentials; a real plan requires the approved deployment identity.
+3. Review a saved plan. Existing bucket or KMS replacement is a stop condition. Both resources use `prevent_destroy`, and the bucket also has `force_destroy = false`.
+4. Confirm all public-access blocks, BucketOwnerEnforced ownership, versioning, KMS default encryption, bucket keys, and the TLS deny policy.
+5. Confirm current objects have no S3 expiration. Only incomplete multipart uploads and noncurrent versions older than the reviewed recovery window may be deleted by lifecycle automation.
+6. Confirm Receive has list/get/put without delete, Store has list/get only, and Compactor alone has list/get/put/delete. Every role trust must use exact `aud` and `sub` equality for its ServiceAccount.
+7. After apply, feed Terraform outputs into the S3 and EKS renderers. Never copy Terraform credentials, state, or plan artifacts into `.runtime` or Git.
+
+### Targeted staging eviction drill
+
+Run the drill only in staging with at least one EBS CSI-capable spare node in the selected Receive pod's zone. Plan mode is read-only:
+
+```bash
+python scripts/run_eks_thanos_staging_drill.py \
+  --context <staging-context> \
+  --pod thanos-receive-0
+```
+
+Review the returned pod, node, zone, and spare node. Execute only after confirming there is no concurrent maintenance, bucket migration, retention change, or active incident:
+
+```bash
+python scripts/run_eks_thanos_staging_drill.py \
+  --context <staging-context> \
+  --pod thanos-receive-0 \
+  --execute-eviction \
+  --confirm-context <staging-context> \
+  --confirm-node <node-from-plan>
+```
+
+Execution cordons only the selected node, submits one `policy/v1` Eviction for the Receive pod, waits for a new UID to become Ready on a different node in the same zone, and uncordons the original node in a `finally` path. It does not drain unrelated Pods. Independently confirm the Receive PDB preserved two available replicas, remote-write continued, backlog returned to zero, and all three Receive replicas recovered before closing the drill.
+
+If the process is force-killed or loses cluster access after cordoning, manually verify and recover the exact planned node with `kubectl --context <staging-context> uncordon <node-from-plan>` before any further maintenance.
+
 ## Alertmanager HA failover
 
 1. Confirm both Alertmanager `/api/v2/status` endpoints report `ready` with two peers and Prometheus targets both replicas directly.

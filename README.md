@@ -60,6 +60,8 @@ Phase 3.26 adds a production Kubernetes topology for that Thanos data path. Rece
 
 Phase 3.27 makes that production contract deployable on standard Amazon EKS managed nodes. A fail-closed overlay adds three distinct IRSA bindings and an encrypted gp3 EBS CSI StorageClass with retained, zone-aware volume binding; a renderer refuses placeholder, wildcard, shared, or malformed role ARNs and emits no AWS credential. A read-only cluster preflight verifies Kubernetes 1.34, three schedulable zones, safe storage semantics, and EBS CSI registration on every eligible node. CI now validates both the provider-neutral 24-resource base and the fully bound 25-resource EKS manifest; real AWS resources and cluster rollout remain explicit operator actions.
 
+Phase 3.28 adds the AWS infrastructure contract behind that overlay. A Terraform 1.15 module provisions a private, versioned, TLS-only S3 bucket, a rotation-enabled KMS key, and three exact-subject IRSA roles; prefix-scoped policy reserves object deletion for Compactor. Both state-owning resources prevent accidental destruction, while lifecycle automation touches only incomplete multipart uploads and noncurrent versions after a 30-day minimum recovery window. A guarded staging drill is read-only by default and requires exact context/node confirmation before it cordons one Receive node, performs a PDB-aware Eviction API request, verifies same-zone EBS rescheduling, and always uncordons the node. CI validates Terraform without AWS credentials and never runs plan or apply.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture

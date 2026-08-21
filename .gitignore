@@ -42,6 +42,14 @@ yarn-error.log*
 infra/alertmanager/secrets/*
 !infra/alertmanager/secrets/README.md
 
+# Terraform runtime and state (dependency lock files remain committable)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
 # vercel
 .vercel
 

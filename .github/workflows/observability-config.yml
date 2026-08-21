@@ -14,6 +14,8 @@ on:
       - scripts/validate_kubernetes_observability.py
       - scripts/render_eks_thanos_manifest.py
       - scripts/preflight_eks_thanos.py
+      - scripts/run_eks_thanos_staging_drill.py
+      - scripts/validate_terraform_thanos.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
   push:
@@ -31,6 +33,8 @@ on:
       - scripts/validate_kubernetes_observability.py
       - scripts/render_eks_thanos_manifest.py
       - scripts/preflight_eks_thanos.py
+      - scripts/run_eks_thanos_staging_drill.py
+      - scripts/validate_terraform_thanos.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
 
@@ -86,6 +90,24 @@ jobs:
           python scripts/validate_kubernetes_observability.py \
             "$runtime_dir/eks-production.yml"
           python -m compileall -q scripts/preflight_eks_thanos.py
+
+      - name: Validate AWS storage and IRSA Terraform module
+        run: |
+          module_dir="$PWD/infra/terraform/modules/aws-thanos-storage"
+          docker run --rm \
+            -v "$module_dir:/work:ro" -w /work \
+            hashicorp/terraform:1.15.8 fmt -check -diff
+          runtime_dir="$(mktemp -d)"
+          cp "$module_dir"/*.tf "$runtime_dir"/
+          docker run --rm \
+            -v "$runtime_dir:/work" -w /work \
+            hashicorp/terraform:1.15.8 \
+            init -backend=false -input=false
+          docker run --rm \
+            -v "$runtime_dir:/work" -w /work \
+            hashicorp/terraform:1.15.8 validate
+          python scripts/validate_terraform_thanos.py "$module_dir"
+          python -m compileall -q scripts/run_eks_thanos_staging_drill.py
 
       - name: Render credential-free production S3 configuration
         run: |
