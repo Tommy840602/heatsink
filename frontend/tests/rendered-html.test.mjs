@@ -70,8 +70,11 @@ test("CAE Operations wires resumable campaigns to the publication gate", async (
   assert.match(page, /api\s*\.\s*getCaeCampaign/);
   assert.match(page, /api\s*\.\s*resumeCaeCampaign/);
   assert.match(page, /Checkpoint resume validated & queued/);
+  assert.match(page, /Existing checkpoint resume reused/);
+  assert.match(page, /Resume lineage/i);
+  assert.match(page, /api\s*\.\s*listCaeResumeAttempts/);
   assert.match(page, /Check & continue/);
-  assert.match(page, /resumePreview\s*&&\s*selectedCampaign\s*&&/);
+  assert.match(page, /resumePreview\s*&&\s*\(/);
   assert.match(page, /Recovered campaign history/i);
   assert.match(apiClient, /submitJob\("cae_campaign"/);
   assert.match(apiClient, /runJob\(\s*"cae_mesh_study"/);
@@ -79,6 +82,7 @@ test("CAE Operations wires resumable campaigns to the publication gate", async (
   assert.match(apiClient, /`\/cae\/campaigns\?limit=\$\{limit\}`/);
   assert.match(apiClient, /`\/cae\/mesh-studies\?limit=\$\{limit\}`/);
   assert.match(apiClient, /`\/cae\/campaigns\/\$\{campaignId\}\/resume`/);
+  assert.match(apiClient, /`\/cae\/resume-attempts\?limit=\$\{limit\}`/);
   assert.doesNotMatch(apiClient, /startCaeResume/);
   assert.match(styles, /\.checkpoint-timeline/);
   assert.match(styles, /\.publication-gate/);

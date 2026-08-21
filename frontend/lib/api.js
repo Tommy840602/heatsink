@@ -153,6 +153,8 @@ export const api = {
     ),
   listCaeCampaigns: (limit = 50) =>
     request(`/cae/campaigns?limit=${limit}`),
+  listCaeResumeAttempts: (limit = 50) =>
+    request(`/cae/resume-attempts?limit=${limit}`),
   getCaeCampaign: (campaignId) =>
     request(`/cae/campaigns/${campaignId}`),
   listMeshStudies: (limit = 20) =>

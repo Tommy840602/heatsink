@@ -12,6 +12,7 @@ from app.services.openfoam_benchmark import OPENFOAM_TARGET, TUTORIAL_RELATIVE_P
 from app.services.cae_history import (
     list_campaign_reports,
     list_mesh_study_reports,
+    list_resume_dispatches,
     load_campaign_report,
     load_mesh_study_report,
 )
@@ -61,6 +62,12 @@ def campaigns(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
     return {"campaigns": reports, "count": len(reports)}
 
 
+@router.get("/cae/resume-attempts")
+def resume_attempts(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+    reports = list_resume_dispatches(repository, limit)
+    return {"resume_attempts": reports, "count": len(reports)}
+
+
 @router.get("/cae/campaigns/{campaign_id}")
 def campaign(campaign_id: str) -> dict[str, Any]:
     try:
@@ -94,7 +101,7 @@ def campaign_resume(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Job queue is unavailable") from exc
-    if result["resume_ready"]:
+    if result["resume_ready"] and not result.get("deduplicated"):
         response.status_code = status.HTTP_202_ACCEPTED
     return result
 

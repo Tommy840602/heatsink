@@ -8,6 +8,7 @@ from app.repositories.artifacts import ArtifactRepository
 
 CAMPAIGN_PATTERN = re.compile(r"^campaign_[0-9a-f]{12}$")
 MESH_STUDY_PATTERN = re.compile(r"^meshstudy_[0-9a-f]{12}$")
+RESUME_ATTEMPT_PATTERN = re.compile(r"^resume_[0-9a-f]{12}$")
 
 
 def _read_report(path: Path) -> dict[str, Any] | None:
@@ -70,6 +71,23 @@ def _mesh_study_summary(report: dict[str, Any]) -> dict[str, Any]:
     return {key: report.get(key) for key in keys}
 
 
+def _resume_dispatch_summary(
+    report: dict[str, Any], repository: ArtifactRepository
+) -> dict[str, Any]:
+    successor_id = str(report.get("successor_campaign_id") or "")
+    try:
+        successor = load_campaign_report(repository, successor_id)
+    except FileNotFoundError:
+        successor = None
+    return {
+        **report,
+        "status": successor.get("status") if successor else report.get("status_at_dispatch"),
+        "stop_reason": successor.get("stop_reason") if successor else None,
+        "results_available": bool(successor and successor.get("results_available")),
+        "successor_available": successor is not None,
+    }
+
+
 def list_campaign_reports(
     repository: ArtifactRepository, limit: int = 50
 ) -> list[dict[str, Any]]:
@@ -122,3 +140,22 @@ def load_mesh_study_report(
     if report is None or report.get("mesh_study_id") != mesh_study_id:
         raise FileNotFoundError(mesh_study_id)
     return report
+
+
+def list_resume_dispatches(
+    repository: ArtifactRepository, limit: int = 50
+) -> list[dict[str, Any]]:
+    reports = [
+        report
+        for path in repository.list_cae_report_paths(
+            "resume-dispatch.json", "resume_"
+        )
+        if (report := _read_report(path)) is not None
+        and RESUME_ATTEMPT_PATTERN.fullmatch(
+            str(report.get("resume_attempt_id") or "")
+        )
+    ]
+    return [
+        _resume_dispatch_summary(report, repository)
+        for report in _newest_first(reports)[:limit]
+    ]

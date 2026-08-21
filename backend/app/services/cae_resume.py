@@ -1,12 +1,16 @@
 import json
 import math
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain.cae import OpenFoamCampaignRequest
 from app.repositories.artifacts import ArtifactRepository
 from app.services.cae_history import load_campaign_report
-from app.services.openfoam_campaign import expected_campaign_case_id
+from app.services.openfoam_campaign import (
+    campaign_id_for_request,
+    expected_campaign_case_id,
+)
 from app.services.openfoam_solve import (
     CHECKPOINT_FILENAME,
     inspect_checkpoint_metadata,
@@ -217,14 +221,59 @@ def enqueue_campaign_resume(
         "parent_campaign_id": campaign_id,
         "resume_attempt_id": resume_attempt_id,
     }
-    job = queue.enqueue("cae_campaign", payload, metadata={"lineage": lineage})
+    issued_request = OpenFoamCampaignRequest.model_validate(payload)
+    successor_campaign_id = campaign_id_for_request(issued_request, repository)
+    lineage["successor_campaign_id"] = successor_campaign_id
+    try:
+        completed_report = load_campaign_report(repository, successor_campaign_id)
+    except FileNotFoundError:
+        completed_report = None
+    if completed_report is not None:
+        job = {
+            "job_id": f"job_{resume_attempt_id}",
+            "task": "cae_campaign",
+            "status": "finished",
+            "result": completed_report,
+            "progress": 100,
+            "stage": "completed",
+            "queue": "thermoform-cae",
+            "cancel_requested": False,
+            "lineage": lineage,
+            "deduplicated": True,
+        }
+    else:
+        job = queue.enqueue_once(
+            "cae_campaign",
+            payload,
+            resume_attempt_id,
+            metadata={"lineage": lineage},
+        )
+    deduplicated = bool(job.get("deduplicated"))
+    dispatch = {
+        **lineage,
+        "job_id": job["job_id"],
+        "queue": job.get("queue", "thermoform-cae"),
+        "status_at_dispatch": job["status"],
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    repository.save_cae_artifact(
+        resume_attempt_id,
+        "resume-dispatch.json",
+        json.dumps(dispatch, indent=2, sort_keys=True),
+    )
     return {
         **preview,
-        "reason": "queued",
-        "detail": "Checkpoint compatibility was validated and the successor campaign was queued in one server operation.",
+        "reason": "deduplicated" if deduplicated else "queued",
+        "detail": (
+            "This resume attempt already exists; the existing job or completed campaign was reused."
+            if deduplicated
+            else "Checkpoint compatibility was validated and the successor campaign was queued in one server operation."
+        ),
         "resume_payload": None,
         "resume_attempt_id": resume_attempt_id,
         "lineage": lineage,
+        "dispatch": dispatch,
+        "deduplicated": deduplicated,
         "job": job,
     }
 

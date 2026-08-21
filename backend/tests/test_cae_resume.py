@@ -25,6 +25,7 @@ SOLVE_ID = "solve_000000000010"
 class RecordingQueue:
     def __init__(self):
         self.calls = []
+        self.once = {}
 
     def enqueue(self, task, payload, metadata=None):
         self.calls.append((task, payload, metadata))
@@ -37,7 +38,26 @@ class RecordingQueue:
             "stage": "queued",
             "cancel_requested": False,
             "lineage": metadata.get("lineage") if metadata else None,
+            "deduplicated": False,
         }
+
+    def enqueue_once(self, task, payload, idempotency_key, metadata=None):
+        if idempotency_key in self.once:
+            return {**self.once[idempotency_key], "deduplicated": True}
+        self.calls.append((task, payload, metadata))
+        job = {
+            "job_id": f"job_{idempotency_key}",
+            "task": task,
+            "status": "queued",
+            "queue": CAE_QUEUE_NAME,
+            "progress": 0,
+            "stage": "queued",
+            "cancel_requested": False,
+            "lineage": metadata.get("lineage") if metadata else None,
+            "deduplicated": False,
+        }
+        self.once[idempotency_key] = job
+        return job
 
 
 def _design(**overrides) -> DesignParameters:
@@ -164,7 +184,7 @@ def test_atomic_resume_injects_lineage_and_enqueues_server_payload(tmp_path):
     assert result["resume_ready"] is True
     assert result["reason"] == "queued"
     assert result["resume_payload"] is None
-    assert result["job"]["job_id"] == "job_resume123"
+    assert result["job"]["job_id"] == f"job_{result['resume_attempt_id']}"
     assert result["resume_attempt_id"].startswith("resume_")
     task, payload, metadata = queue.calls[0]
     assert task == "cae_campaign"
@@ -172,6 +192,55 @@ def test_atomic_resume_injects_lineage_and_enqueues_server_payload(tmp_path):
     assert payload["parent_campaign_id"] == CAMPAIGN_ID
     assert payload["resume_attempt_id"] == result["resume_attempt_id"]
     assert metadata["lineage"] == result["lineage"]
+    dispatch = json.loads(
+        repository.cae_artifact_path(
+            result["resume_attempt_id"], "resume-dispatch.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert dispatch["successor_campaign_id"] == result["lineage"]["successor_campaign_id"]
+
+
+def test_atomic_resume_deduplicates_same_attempt_and_reuses_completed_report(
+    tmp_path,
+):
+    repository = ArtifactRepository(tmp_path)
+    request = _request()
+    queue = RecordingQueue()
+    _save_resumable_campaign(repository, request)
+
+    first = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+    duplicate = enqueue_campaign_resume(CAMPAIGN_ID, request, repository, queue)
+
+    assert first["deduplicated"] is False
+    assert duplicate["deduplicated"] is True
+    assert duplicate["job"]["job_id"] == first["job"]["job_id"]
+    assert len(queue.calls) == 1
+
+    successor_id = first["lineage"]["successor_campaign_id"]
+    repository.save_cae_artifact(
+        successor_id,
+        "campaign-report.json",
+        json.dumps(
+            {
+                "campaign_id": successor_id,
+                "mesh_profile": "medium",
+                "status": "completed_unconverged",
+                "stop_reason": "target_time_reached",
+                "results_available": False,
+                "generated_at": "2026-08-21T06:00:00+00:00",
+            }
+        ),
+    )
+    expired_queue = RecordingQueue()
+
+    completed = enqueue_campaign_resume(
+        CAMPAIGN_ID, request, repository, expired_queue
+    )
+
+    assert completed["deduplicated"] is True
+    assert completed["job"]["status"] == "finished"
+    assert completed["job"]["result"]["campaign_id"] == successor_id
+    assert expired_queue.calls == []
 
 
 def test_atomic_resume_does_not_enqueue_blocked_request(tmp_path):
@@ -242,7 +311,12 @@ def test_atomic_resume_api_returns_202_and_job_lineage(tmp_path, monkeypatch):
     monkeypatch.setattr(cae_api, "repository", repository)
     app.dependency_overrides[get_job_queue] = lambda: queue
     try:
-        response = TestClient(app).post(
+        client = TestClient(app)
+        response = client.post(
+            f"/api/v1/cae/campaigns/{CAMPAIGN_ID}/resume",
+            json=request.model_dump(mode="json"),
+        )
+        duplicate = client.post(
             f"/api/v1/cae/campaigns/{CAMPAIGN_ID}/resume",
             json=request.model_dump(mode="json"),
         )
@@ -254,3 +328,5 @@ def test_atomic_resume_api_returns_202_and_job_lineage(tmp_path, monkeypatch):
     assert body["reason"] == "queued"
     assert body["job"]["queue"] == CAE_QUEUE_NAME
     assert body["job"]["lineage"] == body["lineage"]
+    assert duplicate.status_code == 200
+    assert duplicate.json()["deduplicated"] is True

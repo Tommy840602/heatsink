@@ -37,6 +37,19 @@ def _expected_case_id(
     return expected_campaign_case_id(request, repository)
 
 
+def campaign_id_for_request(
+    request: OpenFoamCampaignRequest, repository: ArtifactRepository
+) -> str:
+    return repository.version(
+        {
+            "case_id": expected_campaign_case_id(request, repository),
+            "request": request.model_dump(mode="json"),
+            "contract": CAMPAIGN_CONTRACT_VERSION,
+        },
+        "campaign",
+    )
+
+
 def _load_solve_report(
     repository: ArtifactRepository, run_id: str
 ) -> dict[str, Any]:
@@ -73,14 +86,7 @@ def run_openfoam_campaign(
     progress_callback = progress_callback or (lambda _current, _total, _stage: None)
     should_cancel = should_cancel or (lambda: False)
     expected_case_id = expected_campaign_case_id(request, repository)
-    campaign_id = repository.version(
-        {
-            "case_id": expected_case_id,
-            "request": request.model_dump(mode="json"),
-            "contract": CAMPAIGN_CONTRACT_VERSION,
-        },
-        "campaign",
-    )
+    campaign_id = campaign_id_for_request(request, repository)
     report_name = "campaign-report.json"
     try:
         existing = repository.cae_artifact_path(campaign_id, report_name)

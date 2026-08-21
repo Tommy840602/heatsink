@@ -298,6 +298,7 @@ function ModuleView({
   const [meshStudyRunning, setMeshStudyRunning] = useState(false);
   const [campaignHistory, setCampaignHistory] = useState([]);
   const [meshStudyHistory, setMeshStudyHistory] = useState([]);
+  const [resumeHistory, setResumeHistory] = useState([]);
   const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
   const [resumeChecking, setResumeChecking] = useState(false);
   const [resumePreview, setResumePreview] = useState(null);
@@ -518,8 +519,13 @@ function ModuleView({
       const job = resume.job;
       window.localStorage.setItem(activeCaeJobStorageKey, job.job_id);
       setResumeChecking(false);
-      notify(`Resume queued · ${resume.resume_attempt_id}`);
+      notify(
+        resume.deduplicated
+          ? `Existing resume reused · ${resume.resume_attempt_id}`
+          : `Resume queued · ${resume.resume_attempt_id}`,
+      );
       await monitorCaeJob(job);
+      await loadCaeHistory();
     } catch {
       notify("Resume preflight or CAE queue is unavailable");
     } finally {
@@ -567,14 +573,17 @@ function ModuleView({
   const loadCaeHistory = async (announce = false) => {
     setCaeHistoryLoading(true);
     try {
-      const [campaignIndex, studyIndex] = await Promise.all([
+      const [campaignIndex, studyIndex, resumeIndex] = await Promise.all([
         api.listCaeCampaigns(),
         api.listMeshStudies(),
+        api.listCaeResumeAttempts(),
       ]);
       const summaries = campaignIndex.campaigns ?? [];
       const studies = studyIndex.mesh_studies ?? [];
+      const attempts = resumeIndex.resume_attempts ?? [];
       setCampaignHistory(summaries);
       setMeshStudyHistory(studies);
+      setResumeHistory(attempts);
 
       const newestByProfile = {};
       for (const summary of summaries) {
@@ -605,7 +614,7 @@ function ModuleView({
           : null,
       );
       if (announce) {
-        notify(`Recovered ${summaries.length} campaigns and ${studies.length} mesh studies`);
+        notify(`Recovered ${summaries.length} campaigns, ${attempts.length} resume attempts, and ${studies.length} mesh studies`);
       }
     } catch {
       if (announce) notify("CAE history API is unavailable");
@@ -1823,15 +1832,15 @@ function ModuleView({
               </div>
             </div>
           )}
-          {resumePreview &&
-            selectedCampaign &&
-            resumePreview.campaign_id === selectedCampaign.campaign_id && (
+          {resumePreview && (
             <div className={`resume-preflight ${resumePreview.resume_ready ? "ready" : "blocked"}`}>
               <i>{resumePreview.resume_ready ? "✓" : "×"}</i>
               <div>
                 <strong>
                   {resumePreview.resume_ready
-                    ? "Checkpoint resume validated & queued"
+                    ? resumePreview.deduplicated
+                      ? "Existing checkpoint resume reused"
+                      : "Checkpoint resume validated & queued"
                     : `Resume blocked · ${readableState(resumePreview.reason)}`}
                 </strong>
                 <p>{resumePreview.detail}</p>
@@ -1880,6 +1889,41 @@ function ModuleView({
               </div>
             ) : (
               <p>No persisted campaign reports discovered.</p>
+            )}
+          </div>
+          <div className="resume-lineage-history">
+            <div>
+              <h3>RESUME LINEAGE</h3>
+              <span>{resumeHistory.length} deterministic attempts</span>
+            </div>
+            {resumeHistory.length ? (
+              <div className="resume-lineage-list">
+                {resumeHistory.slice(0, 6).map((attempt) => (
+                  <article key={attempt.resume_attempt_id}>
+                    <header>
+                      <code>{attempt.resume_attempt_id}</code>
+                      <b className={attempt.results_available ? "passed" : ""}>
+                        {attempt.successor_available
+                          ? readableState(attempt.status)
+                          : "Dispatched"}
+                      </b>
+                    </header>
+                    <div>
+                      <code>{attempt.parent_campaign_id}</code>
+                      <i>→</i>
+                      <code>{attempt.checkpoint_run_id}</code>
+                      <i>→</i>
+                      <code>{attempt.successor_campaign_id}</code>
+                    </div>
+                    <footer>
+                      <span>{Number(attempt.checkpoint_time_s).toExponential(2)} s → {Number(attempt.requested_target_end_time_s).toExponential(2)} s</span>
+                      <small>{attempt.job_id}</small>
+                    </footer>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p>No checkpoint continuation attempts recorded.</p>
             )}
           </div>
         </section>

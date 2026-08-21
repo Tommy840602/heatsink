@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from redis import Redis
 from rq import Queue
+from rq.exceptions import NoSuchJobError
 from rq.job import Job
 
 from app.services.job_tasks import execute_job
@@ -26,6 +27,13 @@ class JobQueue(Protocol):
         self,
         task: str,
         payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+    def enqueue_once(
+        self,
+        task: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
     def get(self, job_id: str) -> dict[str, Any]: ...
@@ -52,11 +60,22 @@ class RqJobQueue:
         payload: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        return self._enqueue(task, payload, metadata)
+
+    def _enqueue(
+        self,
+        task: str,
+        payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        *,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
         queue_name = queue_name_for_task(task)
         metadata = metadata or {}
         job = self.queues[queue_name].enqueue_call(
             func=execute_job,
             args=(task, payload),
+            job_id=job_id,
             meta={
                 "task": task,
                 "progress": 0,
@@ -68,6 +87,34 @@ class RqJobQueue:
             failure_ttl=604800,
         )
         return self._snapshot(job)
+
+    def enqueue_once(
+        self,
+        task: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        job_id = f"job_{idempotency_key}"
+        with self.connection.lock(
+            f"thermoform:enqueue:{idempotency_key}",
+            timeout=30,
+            blocking_timeout=10,
+        ):
+            try:
+                job = Job.fetch(job_id, connection=self.connection)
+            except NoSuchJobError:
+                snapshot = self._enqueue(
+                    task,
+                    payload,
+                    metadata,
+                    job_id=job_id,
+                )
+                snapshot["deduplicated"] = False
+                return snapshot
+            snapshot = self._snapshot(job, refresh=True)
+            snapshot["deduplicated"] = True
+            return snapshot
 
     def get(self, job_id: str) -> dict[str, Any]:
         job = Job.fetch(job_id, connection=self.connection)
@@ -100,6 +147,7 @@ class RqJobQueue:
             "queue": job.meta.get("queue", job.origin),
             "cancel_requested": bool(job.meta.get("cancel_requested", False)),
             "lineage": job.meta.get("lineage"),
+            "deduplicated": False,
         }
 
 

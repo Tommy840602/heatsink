@@ -76,11 +76,12 @@ class ArtifactRepository:
         directory = self.root / "cae" / case_id
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / filename
-        if not path.exists():
-            if isinstance(content, bytes):
-                path.write_bytes(content)
-            else:
-                path.write_text(content, encoding="utf-8")
+        encoded = content if isinstance(content, bytes) else content.encode("utf-8")
+        try:
+            with path.open("xb") as artifact:
+                artifact.write(encoded)
+        except FileExistsError:
+            pass
         return path
 
     def cae_artifact_write_path(self, case_id: str, filename: str) -> Path:

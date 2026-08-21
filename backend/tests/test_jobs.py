@@ -1,9 +1,16 @@
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
+from rq.exceptions import NoSuchJobError
 
 from app.main import app
-from app.services.jobs import CAE_QUEUE_NAME, DEFAULT_QUEUE_NAME, get_job_queue, queue_name_for_task
+from app.services.jobs import (
+    CAE_QUEUE_NAME,
+    DEFAULT_QUEUE_NAME,
+    RqJobQueue,
+    get_job_queue,
+    queue_name_for_task,
+)
 
 
 class FakeQueue:
@@ -78,3 +85,60 @@ def test_cae_benchmark_isolated_queue_routing():
     assert queue_name_for_task("cae_campaign") == CAE_QUEUE_NAME
     assert queue_name_for_task("cae_mesh_study") == CAE_QUEUE_NAME
     assert queue_name_for_task("phase1") == DEFAULT_QUEUE_NAME
+
+
+def test_rq_enqueue_once_locks_deterministic_job_id_and_reuses_it(monkeypatch):
+    class FakeLock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeConnection:
+        def __init__(self):
+            self.lock_keys = []
+
+        def lock(self, key, **_options):
+            self.lock_keys.append(key)
+            return FakeLock()
+
+    queue = object.__new__(RqJobQueue)
+    queue.connection = FakeConnection()
+    created = []
+    existing_job = object()
+    fetch_count = 0
+
+    def fake_fetch(_job_id, connection):
+        nonlocal fetch_count
+        fetch_count += 1
+        assert connection is queue.connection
+        if fetch_count == 1:
+            raise NoSuchJobError
+        return existing_job
+
+    def fake_enqueue(task, payload, metadata, *, job_id):
+        created.append((task, payload, metadata, job_id))
+        return {"job_id": job_id, "status": "queued"}
+
+    monkeypatch.setattr("app.services.jobs.Job.fetch", fake_fetch)
+    monkeypatch.setattr(queue, "_enqueue", fake_enqueue)
+    monkeypatch.setattr(
+        queue,
+        "_snapshot",
+        lambda job, refresh: {
+            "job_id": "job_resume_deadbeefdead",
+            "status": "queued",
+        },
+    )
+
+    first = queue.enqueue_once("cae_campaign", {}, "resume_deadbeefdead")
+    duplicate = queue.enqueue_once("cae_campaign", {}, "resume_deadbeefdead")
+
+    assert created[0][3] == "job_resume_deadbeefdead"
+    assert first["deduplicated"] is False
+    assert duplicate["deduplicated"] is True
+    assert queue.connection.lock_keys == [
+        "thermoform:enqueue:resume_deadbeefdead",
+        "thermoform:enqueue:resume_deadbeefdead",
+    ]

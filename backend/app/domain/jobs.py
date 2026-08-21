@@ -32,3 +32,4 @@ class JobSnapshot(BaseModel):
     queue: str = "thermoform"
     cancel_requested: bool = False
     lineage: dict[str, Any] | None = None
+    deduplicated: bool = False
