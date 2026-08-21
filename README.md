@@ -38,6 +38,8 @@ Phase 3.15 removes the browser dependency from that recovery path. Resume worker
 
 Phase 3.16 adds durable CAE recovery observability. FastAPI derives low-cardinality Prometheus metrics from shared resume, heartbeat, event, and watchdog artifacts, so process restarts do not erase the monitoring state. Prometheus evaluates alerts for a missing or stale watchdog, stale worker heartbeats, orphan repairs, and failed retries; a provisioned Grafana dashboard and the React CAE Operations panel expose the same health contract.
 
+Phase 3.17 makes those alerts operational. Alertmanager groups and deduplicates CAE recovery incidents, routes critical and warning severities with separate repeat intervals, and inhibits dependent symptoms while FastAPI or the watchdog is unavailable. Every rule links to a recovery runbook, a secret-file webhook example keeps receiver credentials out of Git, and GitHub Actions validates Compose, Prometheus rules, Alertmanager routes, and Grafana JSON on every relevant pull request.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -50,6 +52,7 @@ Browser
                  ├─ Redis job queue → isolated RQ worker
                  ├─ RQ Cron watchdog → durable resume heartbeat audit
                  ├─ Prometheus metrics + CAE recovery alerts (:9090)
+                 ├─ Alertmanager grouping + inhibition + routing (:9093)
                  ├─ provisioned Grafana recovery dashboard (:3001)
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
@@ -84,10 +87,12 @@ docker compose --profile cae up --build
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
 - Prometheus: http://localhost:9090
+- Alertmanager: http://localhost:9093
 - Grafana: http://localhost:3001 (`admin` / `thermoform` for local development)
 - Redis and the RQ worker run as internal Compose services.
 - The watchdog service schedules server-side resume reconciliation every 60 seconds; it does not wait for a browser session.
-- Prometheus scrapes durable CAE recovery metrics every 15 seconds. Grafana opens with the `CAE Resume Observability` dashboard provisioned; alert rules are visible in Prometheus, while production notifications require an Alertmanager receiver.
+- Prometheus scrapes durable CAE recovery metrics every 15 seconds and sends firing/resolved state to Alertmanager. The default receivers route active grouped alerts in the local Alertmanager UI without contacting an external system. For production delivery, mount an adapted `infra/alertmanager/alertmanager.webhook.example.yml` and inject its bearer token as a runtime secret.
+- Grafana opens with the `CAE Resume Observability` dashboard provisioned. Every alert links to `docs/runbooks/cae-observability.md`, and `.github/workflows/observability-config.yml` validates all monitoring configuration changed by a pull request.
 - The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
 ## Local development
@@ -183,6 +188,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - Each resumed worker atomically replaces `resume-heartbeat.json` from a dedicated heartbeat thread, so a long solver segment remains distinguishable from a dead worker even if its RQ job record disappears. Terminal events remain append-only and authoritative.
 - `rq cron app.cron_config` schedules `run_resume_watchdog` on the general `thermoform` queue. Every run writes one immutable `resume-watchdog-report.json`; CAE Operations displays the latest scheduled audit separately from its on-open reconciliation.
 - FastAPI derives `/metrics` and `/api/v1/cae/observability` from the shared artifact volume rather than process-local counters. Prometheus alert rules cover API availability, watchdog presence/age, heartbeat leases, orphan repair increments, and failed retries; React shows the same snapshot without parsing Prometheus text.
+- Alertmanager groups by service, component, and severity; critical alerts repeat hourly, warnings repeat every four hours, API loss inhibits dependent recovery symptoms, and a missing watchdog inhibits its stale-age symptom. External delivery credentials belong only in runtime secret files.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

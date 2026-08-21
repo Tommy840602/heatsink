@@ -1,0 +1,52 @@
+name: Observability config
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/observability-config.yml
+      - docker-compose.yml
+      - infra/**
+      - docs/runbooks/cae-observability.md
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/observability-config.yml
+      - docker-compose.yml
+      - infra/**
+      - docs/runbooks/cae-observability.md
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Validate Prometheus config and rules
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.5 \
+            check config /etc/prometheus/prometheus.yml
+
+      - name: Validate Alertmanager routes
+        run: |
+          docker run --rm --entrypoint amtool \
+            -v "$PWD/infra/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.33.0 \
+            check-config /etc/alertmanager/alertmanager.yml
+          docker run --rm --entrypoint amtool \
+            -v "$PWD/infra/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.33.0 \
+            check-config /etc/alertmanager/alertmanager.webhook.example.yml
+
+      - name: Validate Grafana dashboard JSON
+        run: python -m json.tool infra/grafana/dashboards/cae-resume-observability.json >/dev/null

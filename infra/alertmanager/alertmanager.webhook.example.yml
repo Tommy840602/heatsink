@@ -1,0 +1,46 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: operations-webhook
+  group_by:
+    - service
+    - component
+    - severity
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: operations-webhook
+      matchers:
+        - severity="critical"
+      repeat_interval: 1h
+    - receiver: operations-webhook
+      matchers:
+        - severity="warning"
+      repeat_interval: 4h
+
+receivers:
+  - name: operations-webhook
+    webhook_configs:
+      - url: https://alerts.example.com/v1/thermoform
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="ThermoformCaeApiDown"
+    target_matchers:
+      - service="thermoform-cae"
+      - alertname!="ThermoformCaeApiDown"
+    equal:
+      - instance
+  - source_matchers:
+      - alertname="ThermoformCaeWatchdogMissing"
+    target_matchers:
+      - alertname="ThermoformCaeWatchdogStale"
+    equal:
+      - instance
