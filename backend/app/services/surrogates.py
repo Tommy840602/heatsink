@@ -130,14 +130,22 @@ def predict_bundle(bundle: dict[str, Any], rows: np.ndarray) -> dict[str, np.nda
     return predictions
 
 
+def predict_gpr(bundle: dict[str, Any], response: str, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return GPR mean and one-standard-deviation uncertainty in physical response units."""
+    estimator = bundle["responses"][response]["models"]["GPR"]
+    regressor = estimator.regressor_
+    transformed_x = regressor.named_steps["scale"].transform(rows)
+    mean_scaled, std_scaled = regressor.named_steps["model"].predict(transformed_x, return_std=True)
+    mean = estimator.transformer_.inverse_transform(np.asarray(mean_scaled).reshape(-1, 1)).ravel()
+    scale = float(estimator.transformer_.scale_[0])
+    return mean, np.asarray(std_scaled, dtype=float) * scale
+
+
 def predict_design(bundle: dict[str, Any], design: dict[str, float | int]) -> dict[str, Any]:
     row = np.asarray([[float(design[name]) for name in FEATURES]], dtype=float)
     result = {name: round(float(values[0]), 6) for name, values in predict_bundle(bundle, row).items()}
     gpr_entry = bundle["responses"]["t_max"]["models"].get("GPR")
     if gpr_entry is not None:
-        regressor = gpr_entry.regressor_
-        transformed_x = regressor.named_steps["scale"].transform(row)
-        _, std_scaled = regressor.named_steps["model"].predict(transformed_x, return_std=True)
-        target_scale = float(gpr_entry.transformer_.scale_[0])
-        result["t_max_uncertainty"] = round(float(std_scaled[0] * target_scale), 6)
+        _, uncertainty = predict_gpr(bundle, "t_max", row)
+        result["t_max_uncertainty"] = round(float(uncertainty[0]), 6)
     return result

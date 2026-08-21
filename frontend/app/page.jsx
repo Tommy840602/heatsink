@@ -251,8 +251,11 @@ function ModuleView({
   active,
   notify,
   phase1,
+  phase2,
   runWorkflow,
+  runPhase2,
   workflowRunning,
+  phase2Running,
 }) {
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
@@ -261,6 +264,8 @@ function ModuleView({
   const [spacing, setSpacing] = useState(2.4);
   const [velocity, setVelocity] = useState(3.2);
   const [model, setModel] = useState("GPR");
+  const [acquisition, setAcquisition] = useState("EI");
+  const [cadArtifact, setCadArtifact] = useState(null);
   const [apiPrediction, setApiPrediction] = useState(null);
   const design = useMemo(
     () => ({
@@ -284,15 +289,16 @@ function ModuleView({
   useEffect(() => {
     if (active !== "digital-twin") return;
     const timer = window.setTimeout(() => {
-      const prediction = phase1
-        ? api.predictModel(phase1.model_id, design)
+      const modelId = phase2?.model_id ?? phase1?.model_id;
+      const prediction = modelId
+        ? api.predictModel(modelId, design)
         : api.predict(design);
       prediction
         .then(setApiPrediction)
         .catch(() => setApiPrediction(null));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [active, design, phase1]);
+  }, [active, design, phase1, phase2]);
   const predictedTemp = apiPrediction?.t_max.toFixed(1) ?? temp;
   const predictedTheta =
     apiPrediction?.thermal_resistance.toFixed(3) ?? theta;
@@ -305,10 +311,12 @@ function ModuleView({
       ? apiPrediction.t_max_uncertainty
       : undefined;
   const experiments = phase1?.experiments ?? [];
-  const modelMetrics = phase1?.model_metrics.t_max ?? demoMetrics;
-  const selectedModel = phase1?.selected_models.t_max ?? "GPR";
+  const modelMetrics = phase2?.model_metrics.t_max ?? phase1?.model_metrics.t_max ?? demoMetrics;
+  const selectedModel = phase2?.selected_models.t_max ?? phase1?.selected_models.t_max ?? "GPR";
   const pareto = phase1?.optimization.pareto ?? [];
   const recommended = phase1?.optimization.recommended;
+  const currentCad = cadArtifact ?? phase2?.cad;
+  const cadDesign = phase2?.best_design ?? recommended?.design ?? design;
   const sortedTemps = experiments.map((row) => row.t_max).sort((a, b) => a - b);
   const medianTemp = sortedTemps.length
     ? sortedTemps[Math.floor(sortedTemps.length / 2)]
@@ -339,6 +347,22 @@ function ModuleView({
   const massSpan = Math.max(Math.max(...(paretoMasses.length ? paretoMasses : [1])) - massMin, 0.001);
   const tempMin = Math.min(...(paretoTemps.length ? paretoTemps : [0]));
   const tempSpan = Math.max(Math.max(...(paretoTemps.length ? paretoTemps : [1])) - tempMin, 0.001);
+  const prepareCad = async () => {
+    try {
+      const artifact = await api.generateCad(cadDesign);
+      setCadArtifact(artifact);
+      notify(
+        artifact.step_generated
+          ? "FreeCAD STEP and STL generated"
+          : "FreeCAD script and fallback STL generated · STEP requires FreeCAD",
+      );
+    } catch {
+      notify("CAD backend unavailable or geometry bounds are invalid");
+    }
+  };
+  const downloadCadArtifact = (path) => {
+    if (path) window.open(api.artifactUrl(path), "_blank", "noopener,noreferrer");
+  };
   if (active === "design")
     return (
       <div className="content">
@@ -929,6 +953,26 @@ function ModuleView({
             >
               {workflowRunning ? "Optimizing…" : "Run Phase 1 optimization"} <span>→</span>
             </button>
+            <h3>BAYESIAN OPTIMIZATION</h3>
+            <div className="bo-controls" aria-label="Acquisition function">
+              {["EI", "PI", "UCB"].map((name) => (
+                <button
+                  key={name}
+                  className={acquisition === name ? "selected" : ""}
+                  onClick={() => setAcquisition(name)}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            <button
+              className="outline-button"
+              disabled={!phase1 || phase2Running}
+              onClick={() => runPhase2(acquisition)}
+            >
+              {phase2Running ? "Learning from experiments…" : "Run Phase 2 loop"}
+              <span>→</span>
+            </button>
           </section>
           <section className="panel pareto-panel">
             <div className="panel-title">
@@ -992,6 +1036,33 @@ function ModuleView({
             </button>
           ))}
         </div>
+        {phase2 && (
+          <section className="panel top-gap phase2-summary">
+            <div className="panel-title">
+              <div>
+                <h2>Bayesian learning trace</h2>
+                <p>
+                  {phase2.acquisition} · {phase2.iterations} simulator feedback cycles · {phase2.dataset_version}
+                </p>
+              </div>
+              <span className="candidate">PHASE 2 COMPLETE</span>
+            </div>
+            <div className="phase2-proposals">
+              {phase2.proposals.map((proposal) => (
+                <article key={proposal.iteration}>
+                  <small>ITERATION {proposal.iteration}</small>
+                  <strong>{proposal.simulated_responses.t_max.toFixed(2)}°C</strong>
+                  <span>
+                    μ {proposal.objective_mean.toFixed(2)} · σ {proposal.objective_uncertainty.toFixed(2)}
+                  </span>
+                  <span>
+                    {proposal.design.fin_count} fins · {proposal.design.air_velocity.toFixed(2)} m/s
+                  </span>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     );
   if (active === "digital-twin")
@@ -1145,15 +1216,15 @@ function ModuleView({
       <PageHead
         kicker="PARAMETRIC GEOMETRY"
         title="CAD generation"
-        description="Turn an optimized parameter set into a traceable manufacturing-ready artifact."
-        badge="Geometry valid"
+        description="Turn an optimized parameter set into traceable FreeCAD-compatible geometry artifacts."
+        badge={currentCad ? (currentCad.step_generated ? "FreeCAD STEP ready" : "FreeCAD script ready") : "Geometry ready"}
       />
       <div className="cad-layout">
         <section className="panel cad-preview">
           <div className="panel-title">
             <div>
               <h2>Optimal heat sink</h2>
-              <p>Candidate 07 · isometric preview</p>
+              <p>{phase2 ? "Bayesian best design" : "Recommended design"} · isometric preview</p>
             </div>
             <span className="tag">SOLID</span>
           </div>
@@ -1181,11 +1252,12 @@ function ModuleView({
             </div>
           </div>
           {[
-            ["Fin count", "48"],
-            ["Fin thickness", "0.65 mm"],
-            ["Fin height", "52.0 mm"],
-            ["Fin spacing", "2.40 mm"],
-            ["Base plate", "120 × 90 × 5 mm"],
+            ["Fin count", String(cadDesign.fin_count)],
+            ["Fin thickness", `${cadDesign.fin_thickness.toFixed(2)} mm`],
+            ["Fin height", `${cadDesign.fin_height.toFixed(1)} mm`],
+            ["Fin spacing", `${cadDesign.fin_spacing.toFixed(2)} mm`],
+            ["Base plate", `${(currentCad?.geometry.base_width ?? 120).toFixed(1)} × ${(currentCad?.geometry.base_length ?? 90).toFixed(1)} × ${(currentCad?.geometry.base_thickness ?? 4).toFixed(1)} mm`],
+            ["CAD mass", currentCad ? `${currentCad.cad_mass_estimate_g.toFixed(1)} g` : "Pending"],
             ["Material", "Al 6063-T5"],
           ].map((r) => (
             <div className="spec" key={r[0]}>
@@ -1195,24 +1267,42 @@ function ModuleView({
           ))}
           <div className="artifact">
             <span>ARTIFACT ID</span>
-            <code>cad_01J8K4F2_v003</code>
-            <small>SHA-256 verified · model v8 · dataset v12</small>
+            <code>{currentCad?.cad_id ?? "Not generated"}</code>
+            <small>
+              {currentCad
+                ? `${currentCad.stl_generator} · ${currentCad.step_generated ? "STEP verified" : "STEP not generated"}`
+                : "Run Phase 2 or prepare artifacts"}
+            </small>
           </div>
           <button
             className="primary-action"
-            onClick={() => notify("STEP package generated and verified")}
+            onClick={() =>
+              currentCad
+                ? downloadCadArtifact(currentCad.downloads.freecad_script)
+                : prepareCad()
+            }
           >
-            Generate STEP <span>↓</span>
+            {currentCad ? "Download FreeCAD script" : "Prepare CAD artifacts"} <span>↓</span>
           </button>
           <button
             className="outline-button"
-            onClick={() => notify("STL mesh generated")}
+            disabled={!currentCad}
+            onClick={() => downloadCadArtifact(currentCad?.downloads.stl)}
           >
-            Export STL <span>↓</span>
+            Download STL <span>↓</span>
           </button>
+          {currentCad?.step_generated && (
+            <button
+              className="outline-button"
+              onClick={() => downloadCadArtifact(currentCad.downloads.step)}
+            >
+              Download STEP <span>↓</span>
+            </button>
+          )}
           <p className="disclaimer">
-            Geometry preview only. Manufacturing tolerances require downstream
-            CAD validation.
+            {currentCad?.step_generated
+              ? "FreeCAD export completed. Manufacturing tolerances still require downstream validation."
+              : "The STL fallback is a parametric preview, not a FreeCAD STEP export or CAE result."}
           </p>
         </section>
       </div>
@@ -1224,7 +1314,9 @@ export default function Home() {
   const [active, setActive] = useState("overview");
   const [toast, setToast] = useState("");
   const [phase1, setPhase1] = useState(null);
+  const [phase2, setPhase2] = useState(null);
   const [workflowRunning, setWorkflowRunning] = useState(false);
+  const [phase2Running, setPhase2Running] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
   useEffect(() => {
     api
@@ -1242,6 +1334,7 @@ export default function Home() {
     try {
       const result = await api.runPhase1(method, runs);
       setPhase1(result);
+      setPhase2(null);
       setApiStatus("online");
       notify(`Phase 1 complete · ${result.experiment_count} experiments · ${result.selected_models.t_max} selected`);
     } catch {
@@ -1249,6 +1342,29 @@ export default function Home() {
       notify("FastAPI unavailable · start backend on :8000");
     } finally {
       setWorkflowRunning(false);
+    }
+  };
+  const runPhase2 = async (acquisition = "EI") => {
+    if (!phase1) {
+      notify("Run Phase 1 first to create a dataset and GPR model");
+      return;
+    }
+    setPhase2Running(true);
+    notify(`${acquisition} Phase 2 started · propose → simulate → retrain → CAD`);
+    try {
+      const result = await api.runPhase2(
+        phase1.model_id,
+        phase1.dataset_version,
+        acquisition,
+        3,
+      );
+      setPhase2(result);
+      setApiStatus("online");
+      notify(`Phase 2 complete · ${result.iterations} learning cycles · ${result.model_id}`);
+    } catch {
+      notify("Phase 2 backend unavailable · run FastAPI with persisted Phase 1 artifacts");
+    } finally {
+      setPhase2Running(false);
     }
   };
   return (
@@ -1333,8 +1449,11 @@ export default function Home() {
             active={active}
             notify={notify}
             phase1={phase1}
+            phase2={phase2}
             runWorkflow={runWorkflow}
+            runPhase2={runPhase2}
             workflowRunning={workflowRunning}
+            phase2Running={phase2Running}
           />
         )}
       </section>

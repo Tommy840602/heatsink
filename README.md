@@ -2,6 +2,8 @@
 
 Thermoform is a separated React + FastAPI engineering application for heat-sink design exploration. Phase 1 is an executable DOE → physics simulation → statistical analysis → surrogate training → optimization loop, with immutable dataset/model artifacts and a React digital-twin interface.
 
+Phase 2 adds iterative Bayesian Optimization and FreeCAD-compatible parametric CAD artifacts. A STEP file is reported only when a real `FreeCADCmd` execution succeeds; otherwise the system returns the runnable FreeCAD script plus an explicitly identified preview STL.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -16,6 +18,8 @@ Browser
                  ├─ quadratic RSM, ANOVA, and residual diagnostics
                  ├─ RSM / Random Forest / XGBoost / GPR evaluation
                  ├─ differential evolution + NSGA-II optimization
+                 ├─ EI / PI / UCB Bayesian learning loop
+                 ├─ FreeCAD script + STEP/STL artifact adapter
                  └─ versioned dataset and model artifacts
 ```
 
@@ -71,6 +75,10 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/models/{model_id}/predict` | Predict with the selected persisted surrogate |
 | `POST` | `/api/v1/optimizations/run` | Run single- or multi-objective optimization |
 | `POST` | `/api/v1/workflows/phase1/run` | Execute the complete Phase 1 closed loop |
+| `POST` | `/api/v1/bayesian/propose` | Rank the next experiment with EI, PI, or UCB |
+| `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
+| `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
+| `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
 
 ## Phase 1 behavior
 
@@ -79,6 +87,13 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - The GPR model exposes predictive uncertainty for digital-twin what-if queries.
 - Artifacts are written under `backend/data/` by default. Set `THERMOFORM_ARTIFACT_DIR` to relocate them.
 - Optimization enforces `Tmax < 80°C` and pressure-drop limits against the persisted surrogate bundle.
+
+## Phase 2 behavior
+
+- EI, PI, and UCB use the persisted Gaussian Process mean and uncertainty to select the next experiment.
+- Each selected design is evaluated by the reduced-order physics simulator, appended to a new immutable dataset, and used to update GPR before the next iteration.
+- At loop completion, all four surrogate families are cross-validated again and saved as a new model artifact.
+- The best feasible design is converted to a parameterized FreeCAD Python script. If FreeCAD is installed, the adapter executes it and exports STEP, STL, and FCStd; otherwise only the script and a clearly labeled fallback STL are produced.
 
 ## Verification
 

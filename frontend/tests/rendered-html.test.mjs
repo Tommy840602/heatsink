@@ -34,9 +34,13 @@ test("React frontend uses the JavaScript FastAPI client", async () => {
   assert.match(page, /api\s*\.\s*runPhase1/);
   assert.match(page, /api\s*\.\s*predict/);
   assert.match(page, /api\s*\.\s*predictModel/);
+  assert.match(page, /api\s*\.\s*runPhase2/);
+  assert.match(page, /api\s*\.\s*generateCad/);
   assert.match(api, /NEXT_PUBLIC_API_URL/);
   assert.match(api, /\/workflows\/phase1\/run/);
   assert.match(api, /\/models\/\$\{modelId\}\/predict/);
+  assert.match(api, /\/workflows\/phase2\/run/);
+  assert.match(api, /\/cad\/generate/);
   assert.match(api, /\/simulations\/predict/);
   assert.match(layout, /Thermoform — Engineering Intelligence/);
 });

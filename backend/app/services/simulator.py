@@ -9,7 +9,12 @@ SIMULATOR_VERSION = "1.0.0"
 
 def simulate(design: DesignParameters, noise_std: float = 0.0, seed: int = 42) -> SimulationResult:
     """Deterministic reduced-order heat-sink model. This is not CFD."""
-    width = 0.12
+    occupied_width = (
+        design.fin_count * design.fin_thickness
+        + (design.fin_count - 1) * design.fin_spacing
+        + 4.0
+    ) / 1000
+    width = max(0.12, occupied_width)
     length = 0.09
     base_thickness = 0.004
     height = design.fin_height / 1000

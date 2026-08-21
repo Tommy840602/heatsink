@@ -25,6 +25,12 @@ class ArtifactRepository:
             path.write_text(json.dumps(records, indent=2, sort_keys=True), encoding="utf-8")
         return version
 
+    def load_dataset(self, version: str) -> list[dict[str, Any]]:
+        path = self.root / "experiments" / f"{version}.json"
+        if not path.exists():
+            raise FileNotFoundError(version)
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def save_model(self, model_id: str, bundle: dict[str, Any], metadata: dict[str, Any]) -> None:
         directory = self.root / "models" / model_id
         directory.mkdir(parents=True, exist_ok=True)
@@ -45,3 +51,19 @@ class ArtifactRepository:
         if not path.exists():
             raise FileNotFoundError(model_id)
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def save_cad_artifact(self, cad_id: str, filename: str, content: str) -> Path:
+        directory = self.root / "cad" / cad_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+        return path
+
+    def cad_artifact_path(self, cad_id: str, filename: str) -> Path:
+        if Path(filename).name != filename:
+            raise FileNotFoundError(filename)
+        path = self.root / "cad" / cad_id / filename
+        if not path.exists():
+            raise FileNotFoundError(filename)
+        return path
