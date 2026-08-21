@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.domain.cae import OpenFoamCaseRequest
@@ -8,6 +8,12 @@ from app.repositories.artifacts import ArtifactRepository
 from app.services.openfoam import prepare_openfoam_case
 from app.services.jobs import CAE_QUEUE_NAME
 from app.services.openfoam_benchmark import OPENFOAM_TARGET, TUTORIAL_RELATIVE_PATH
+from app.services.cae_history import (
+    list_campaign_reports,
+    list_mesh_study_reports,
+    load_campaign_report,
+    load_mesh_study_report,
+)
 
 
 router = APIRouter(prefix="/api/v1")
@@ -45,6 +51,34 @@ def create_case(request: OpenFoamCaseRequest) -> dict[str, Any]:
         return prepare_openfoam_case(request, repository)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/cae/campaigns")
+def campaigns(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+    reports = list_campaign_reports(repository, limit)
+    return {"campaigns": reports, "count": len(reports)}
+
+
+@router.get("/cae/campaigns/{campaign_id}")
+def campaign(campaign_id: str) -> dict[str, Any]:
+    try:
+        return load_campaign_report(repository, campaign_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="CAE campaign not found") from exc
+
+
+@router.get("/cae/mesh-studies")
+def mesh_studies(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    reports = list_mesh_study_reports(repository, limit)
+    return {"mesh_studies": reports, "count": len(reports)}
+
+
+@router.get("/cae/mesh-studies/{mesh_study_id}")
+def mesh_study(mesh_study_id: str) -> dict[str, Any]:
+    try:
+        return load_mesh_study_report(repository, mesh_study_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="CAE mesh study not found") from exc
 
 
 @router.get("/cae/{case_id}/artifacts/{filename}")

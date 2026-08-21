@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 
 const nav = [
@@ -46,6 +46,8 @@ const terminalJobStatuses = new Set([
   "stopped",
   "canceled",
 ]);
+
+const activeCaeJobStorageKey = "thermoform:active-cae-job";
 
 const readableState = (value = "pending") =>
   value.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
@@ -294,6 +296,10 @@ function ModuleView({
   const [campaignRunning, setCampaignRunning] = useState(false);
   const [meshStudy, setMeshStudy] = useState(null);
   const [meshStudyRunning, setMeshStudyRunning] = useState(false);
+  const [campaignHistory, setCampaignHistory] = useState([]);
+  const [meshStudyHistory, setMeshStudyHistory] = useState([]);
+  const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
+  const monitoredCaeJobRef = useRef(null);
   const design = useMemo(
     () => ({
       fin_count: fins,
@@ -420,20 +426,22 @@ function ModuleView({
       setBenchmarkRunning(false);
     }
   };
-  const runCaeCampaign = async () => {
+  const clearStoredCaeJob = (jobId) => {
+    if (window.localStorage.getItem(activeCaeJobStorageKey) === jobId) {
+      window.localStorage.removeItem(activeCaeJobStorageKey);
+    }
+  };
+  const monitorCaeJob = async (initialJob, recovered = false) => {
+    if (monitoredCaeJobRef.current) return;
+    monitoredCaeJobRef.current = initialJob.job_id;
     setCampaignRunning(true);
-    setMeshStudy(null);
-    notify(`${meshProfile} CAE campaign queued · cancellation stops at a safe checkpoint`);
+    let job = initialJob;
+    setCampaignJob(job);
+    setJobStatus(job);
+    if (recovered && !terminalJobStatuses.has(job.status)) {
+      notify(`Reconnected to ${job.job_id} · ${readableState(job.stage)}`);
+    }
     try {
-      let job = await api.startCaeCampaign(cadDesign, {
-        mesh_profile: meshProfile,
-        target_end_time_s: Number(targetEndTime),
-        segment_duration_s: Number(segmentDuration),
-        parallel_processes: Number(parallelProcesses),
-        max_segments: Number(maxSegments),
-      });
-      setCampaignJob(job);
-      setJobStatus(job);
       while (!terminalJobStatuses.has(job.status)) {
         await new Promise((resolve) => window.setTimeout(resolve, 900));
         job = await api.getJob(job.job_id);
@@ -445,18 +453,41 @@ function ModuleView({
           ...current,
           [job.result.mesh_profile]: job.result,
         }));
+        clearStoredCaeJob(job.job_id);
         notify(
           job.result.results_available
             ? `${readableState(job.result.mesh_profile)} campaign converged · mesh study still required`
             : `Campaign stopped safely · ${readableState(job.result.stop_reason)}`,
         );
       } else {
+        clearStoredCaeJob(job.job_id);
         notify(job.error ?? `CAE job ${readableState(job.status)}`);
       }
     } catch {
-      notify("CAE campaign queue unavailable · start Redis and the CAE worker");
+      notify("CAE job polling paused · it will reconnect when CAE Operations is reopened");
     } finally {
+      if (monitoredCaeJobRef.current === initialJob.job_id) {
+        monitoredCaeJobRef.current = null;
+      }
       setCampaignRunning(false);
+    }
+  };
+  const runCaeCampaign = async () => {
+    setMeshStudy(null);
+    notify(`${meshProfile} CAE campaign queued · cancellation stops at a safe checkpoint`);
+    try {
+      const job = await api.startCaeCampaign(cadDesign, {
+        mesh_profile: meshProfile,
+        target_end_time_s: Number(targetEndTime),
+        segment_duration_s: Number(segmentDuration),
+        parallel_processes: Number(parallelProcesses),
+        max_segments: Number(maxSegments),
+      });
+      window.localStorage.setItem(activeCaeJobStorageKey, job.job_id);
+      await monitorCaeJob(job);
+    } catch {
+      setCampaignRunning(false);
+      notify("CAE campaign queue unavailable · start Redis and the CAE worker");
     }
   };
   const cancelCaeCampaign = async () => {
@@ -497,6 +528,91 @@ function ModuleView({
       setMeshStudyRunning(false);
     }
   };
+  const loadCaeHistory = async (announce = false) => {
+    setCaeHistoryLoading(true);
+    try {
+      const [campaignIndex, studyIndex] = await Promise.all([
+        api.listCaeCampaigns(),
+        api.listMeshStudies(),
+      ]);
+      const summaries = campaignIndex.campaigns ?? [];
+      const studies = studyIndex.mesh_studies ?? [];
+      setCampaignHistory(summaries);
+      setMeshStudyHistory(studies);
+
+      const newestByProfile = {};
+      for (const summary of summaries) {
+        if (!newestByProfile[summary.mesh_profile]) {
+          newestByProfile[summary.mesh_profile] = summary;
+        }
+      }
+      const detailedCampaigns = await Promise.all(
+        Object.values(newestByProfile).map((summary) =>
+          api.getCaeCampaign(summary.campaign_id),
+        ),
+      );
+      const restoredCampaigns = Object.fromEntries(
+        detailedCampaigns.map((report) => [report.mesh_profile, report]),
+      );
+      setCampaignResults(restoredCampaigns);
+
+      const matchingStudy = studies.find((study) =>
+        ["coarse", "medium", "fine"].every(
+          (profile) =>
+            study.campaign_ids?.[profile] ===
+            restoredCampaigns[profile]?.campaign_id,
+        ),
+      );
+      setMeshStudy(
+        matchingStudy
+          ? await api.getMeshStudy(matchingStudy.mesh_study_id)
+          : null,
+      );
+      if (announce) {
+        notify(`Recovered ${summaries.length} campaigns and ${studies.length} mesh studies`);
+      }
+    } catch {
+      if (announce) notify("CAE history API is unavailable");
+    } finally {
+      setCaeHistoryLoading(false);
+    }
+  };
+  const inspectCampaignHistory = async (summary) => {
+    try {
+      const report = await api.getCaeCampaign(summary.campaign_id);
+      setMeshProfile(report.mesh_profile);
+      setCampaignResults((current) => ({
+        ...current,
+        [report.mesh_profile]: report,
+      }));
+      notify(`${report.campaign_id} loaded from immutable history`);
+    } catch {
+      notify("Campaign report is no longer available");
+    }
+  };
+  useEffect(() => {
+    if (active !== "cae-operations") return;
+    let disposed = false;
+    const restore = async () => {
+      await loadCaeHistory();
+      if (disposed || campaignRunning) return;
+      const jobId = window.localStorage.getItem(activeCaeJobStorageKey);
+      if (!jobId) return;
+      try {
+        const job = await api.getJob(jobId);
+        if (!disposed) await monitorCaeJob(job, true);
+      } catch {
+        if (!disposed) {
+          window.localStorage.removeItem(activeCaeJobStorageKey);
+          notify("Saved CAE job expired; immutable campaign history was restored instead");
+        }
+      }
+    };
+    restore();
+    return () => {
+      disposed = true;
+    };
+  }, [active]);
   if (active === "design")
     return (
       <div className="content">
@@ -1522,10 +1638,14 @@ function ModuleView({
             </div>
             <button
               className="primary-action"
-              disabled={campaignRunning}
+              disabled={campaignRunning || caeHistoryLoading}
               onClick={runCaeCampaign}
             >
-              {campaignRunning ? `Running ${meshProfile} campaign…` : `Run ${meshProfile} campaign`}
+              {campaignRunning
+                ? `Running ${meshProfile} campaign…`
+                : caeHistoryLoading
+                  ? "Recovering CAE state…"
+                  : `Run ${meshProfile} campaign`}
               <span>→</span>
             </button>
           </section>
@@ -1588,11 +1708,20 @@ function ModuleView({
               <h2>Checkpoint timeline</h2>
               <p>{meshProfile} campaign · immutable segment snapshots and response-readiness gates.</p>
             </div>
-            <span className="tag">
-              {selectedCampaign
-                ? `${selectedCampaign.segments_completed} SEGMENTS · ${readableState(selectedCampaign.stop_reason)}`
-                : "NO CHECKPOINTS"}
-            </span>
+            <div className="history-actions">
+              <button
+                className="text-button"
+                disabled={caeHistoryLoading}
+                onClick={() => loadCaeHistory(true)}
+              >
+                {caeHistoryLoading ? "Recovering…" : "Refresh history ↻"}
+              </button>
+              <span className="tag">
+                {selectedCampaign
+                  ? `${selectedCampaign.segments_completed} SEGMENTS · ${readableState(selectedCampaign.stop_reason)}`
+                  : "NO CHECKPOINTS"}
+              </span>
+            </div>
           </div>
           {timeline.length ? (
             <div className="checkpoint-timeline">
@@ -1644,6 +1773,44 @@ function ModuleView({
               )}
             </div>
           )}
+          <div className="cae-history">
+            <div>
+              <h3>RECOVERED CAMPAIGN HISTORY</h3>
+              <span>{campaignHistory.length} campaigns · {meshStudyHistory.length} mesh studies</span>
+            </div>
+            {campaignHistory.length ? (
+              <div className="cae-history-list">
+                {campaignHistory.slice(0, 8).map((summary) => (
+                  <button
+                    className={
+                      selectedCampaign?.campaign_id === summary.campaign_id
+                        ? "selected"
+                        : ""
+                    }
+                    key={summary.campaign_id}
+                    onClick={() => inspectCampaignHistory(summary)}
+                  >
+                    <i className={summary.results_available ? "passed" : ""}>
+                      {summary.results_available ? "✓" : "•"}
+                    </i>
+                    <span>
+                      <b>{summary.mesh_profile.toUpperCase()} · {readableState(summary.status)}</b>
+                      <small>{summary.campaign_id}</small>
+                    </span>
+                    <span>
+                      <b>{summary.segments_completed} segments</b>
+                      <small>{readableState(summary.stop_reason)}</small>
+                    </span>
+                    <time dateTime={summary.generated_at}>
+                      {new Date(summary.generated_at).toLocaleDateString()}
+                    </time>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p>No persisted campaign reports discovered.</p>
+            )}
+          </div>
         </section>
 
         <section className="panel top-gap mesh-study-panel">

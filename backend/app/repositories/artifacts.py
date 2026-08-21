@@ -104,3 +104,17 @@ class ArtifactRepository:
         if not path.exists():
             raise FileNotFoundError(filename)
         return path
+
+    def list_cae_report_paths(self, filename: str, prefix: str) -> list[Path]:
+        if Path(filename).name != filename:
+            raise ValueError("CAE report filename must not contain a path")
+        directory = self.root / "cae"
+        if not directory.exists():
+            return []
+        return [
+            report
+            for artifact_directory in directory.iterdir()
+            if artifact_directory.is_dir()
+            and artifact_directory.name.startswith(prefix)
+            and (report := artifact_directory / filename).is_file()
+        ]

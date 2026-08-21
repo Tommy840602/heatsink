@@ -319,6 +319,95 @@
   font-size: 8px;
 }
 
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-actions button:disabled {
+  opacity: 0.5;
+}
+
+.cae-history {
+  margin-top: 22px;
+  padding-top: 17px;
+  border-top: 1px solid var(--line);
+}
+
+.cae-history > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cae-history h3 {
+  margin: 0;
+  font-size: 7px;
+  letter-spacing: 0.9px;
+  color: #737d79;
+}
+
+.cae-history > div:first-child > span,
+.cae-history > p {
+  font-size: 7px;
+  color: #89918e;
+}
+
+.cae-history-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.cae-history-list button {
+  display: grid;
+  grid-template-columns: 24px 1.4fr 0.8fr auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  background: #f9faf9;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cae-history-list button.selected {
+  border-color: var(--orange);
+  background: #fff5f1;
+}
+
+.cae-history-list button > i {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e7eae8;
+  color: #737d79;
+  font-style: normal;
+  font-size: 8px;
+}
+
+.cae-history-list button > i.passed {
+  color: #fff;
+  background: var(--green);
+}
+
+.cae-history-list b,
+.cae-history-list small {
+  display: block;
+  font-size: 7px;
+}
+
+.cae-history-list small,
+.cae-history-list time {
+  color: #89918e;
+  margin-top: 3px;
+  font-size: 7px;
+}
+
 .mesh-profile-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -484,5 +573,9 @@
 
   .campaign-stop-summary button {
     grid-column: 1 / 3;
+  }
+
+  .cae-history-list {
+    grid-template-columns: 1fr;
   }
 }

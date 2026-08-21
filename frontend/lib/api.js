@@ -142,6 +142,14 @@ export const api = {
       },
       onStatus,
     ),
+  listCaeCampaigns: (limit = 50) =>
+    request(`/cae/campaigns?limit=${limit}`),
+  getCaeCampaign: (campaignId) =>
+    request(`/cae/campaigns/${campaignId}`),
+  listMeshStudies: (limit = 20) =>
+    request(`/cae/mesh-studies?limit=${limit}`),
+  getMeshStudy: (meshStudyId) =>
+    request(`/cae/mesh-studies/${meshStudyId}`),
   generateCad: (design) =>
     request("/cad/generate", {
       method: "POST",
