@@ -11,6 +11,24 @@ async function request(path, options) {
   return response.json();
 }
 
+async function runJob(task, payload, onStatus) {
+  let job = await request("/jobs", {
+    method: "POST",
+    body: JSON.stringify({ task, payload }),
+  });
+  onStatus?.(job);
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    if (job.status === "finished") return job.result;
+    if (["failed", "stopped", "canceled"].includes(job.status)) {
+      throw new Error(job.error ?? `${task} job failed`);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+    job = await request(`/jobs/${job.job_id}`);
+    onStatus?.(job);
+  }
+  throw new Error(`${task} job timed out while polling`);
+}
+
 export const api = {
   health: () => request("/health"),
   validateDesign: (design) =>
@@ -28,27 +46,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify(design),
     }),
-  runPhase1: (method, runs) =>
-    request("/workflows/phase1/run", {
-      method: "POST",
-      body: JSON.stringify({
+  runPhase1: (method, runs, onStatus) =>
+    runJob(
+      "phase1",
+      {
         method,
         runs,
         seed: 42,
         noise_std: 0,
         response_for_analysis: "t_max",
         optimization_generations: 25,
-      }),
-    }),
+      },
+      onStatus,
+    ),
   predictModel: (modelId, design) =>
     request(`/models/${modelId}/predict`, {
       method: "POST",
       body: JSON.stringify({ design }),
     }),
-  runPhase2: (modelId, datasetVersion, acquisition = "EI", iterations = 3) =>
-    request("/workflows/phase2/run", {
-      method: "POST",
-      body: JSON.stringify({
+  runPhase2: (modelId, datasetVersion, acquisition = "EI", iterations = 3, onStatus) =>
+    runJob(
+      "phase2",
+      {
         model_id: modelId,
         dataset_version: datasetVersion,
         acquisition,
@@ -56,8 +75,21 @@ export const api = {
         seed: 42,
         noise_std: 0,
         generate_cad: true,
-      }),
-    }),
+      },
+      onStatus,
+    ),
+  prepareCae: (design, runSolver = false, onStatus) =>
+    runJob(
+      "cae",
+      {
+        design,
+        heat_load_w: 100,
+        ambient_temperature_c: 25,
+        run_solver: runSolver,
+        solver: "chtMultiRegionFoam",
+      },
+      onStatus,
+    ),
   generateCad: (design) =>
     request("/cad/generate", {
       method: "POST",

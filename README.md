@@ -4,6 +4,8 @@ Thermoform is a separated React + FastAPI engineering application for heat-sink 
 
 Phase 2 adds iterative Bayesian Optimization and FreeCAD-compatible parametric CAD artifacts. A STEP file is reported only when a real `FreeCADCmd` execution succeeds; otherwise the system returns the runnable FreeCAD script plus an explicitly identified preview STL.
 
+Phase 3 moves long workflows to Redis/RQ workers and adds a traceable OpenFOAM CHT case handoff. Case generation is never reported as a CFD result: mesh validation, a successful solver run, convergence checks, and result parsing are separate states.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -13,6 +15,7 @@ Browser
   └─ React frontend (:3000)
        └─ JavaScript HTTP client
             └─ FastAPI backend (:8000)
+                 ├─ Redis job queue → isolated RQ worker
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
                  ├─ quadratic RSM, ANOVA, and residual diagnostics
@@ -20,6 +23,7 @@ Browser
                  ├─ differential evolution + NSGA-II optimization
                  ├─ EI / PI / UCB Bayesian learning loop
                  ├─ FreeCAD script + STEP/STL artifact adapter
+                 ├─ OpenFOAM CHT case packaging and guarded execution
                  └─ versioned dataset and model artifacts
 ```
 
@@ -37,6 +41,7 @@ docker compose up --build
 - Frontend: http://localhost:3000
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
+- Redis and the RQ worker run as internal Compose services.
 
 ## Local development
 
@@ -79,6 +84,10 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
 | `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
 | `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
+| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, or CAE work and return `202` |
+| `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
+| `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
+| `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
 
 ## Phase 1 behavior
 
@@ -94,6 +103,13 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - Each selected design is evaluated by the reduced-order physics simulator, appended to a new immutable dataset, and used to update GPR before the next iteration.
 - At loop completion, all four surrogate families are cross-validated again and saved as a new model artifact.
 - The best feasible design is converted to a parameterized FreeCAD Python script. If FreeCAD is installed, the adapter executes it and exports STEP, STL, and FCStd; otherwise only the script and a clearly labeled fallback STL are produced.
+
+## Async jobs and OpenFOAM handoff
+
+- The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
+- API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
+- The OpenFOAM ZIP includes the exact parametric STL, case manifest, `blockMesh`, `snappyHexMesh`, region-splitting setup, and a fail-fast `Allrun` script targeting `chtMultiRegionFoam`.
+- Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
 
 ## Verification
 

@@ -256,6 +256,7 @@ function ModuleView({
   runPhase2,
   workflowRunning,
   phase2Running,
+  jobStatus,
 }) {
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
@@ -266,6 +267,8 @@ function ModuleView({
   const [model, setModel] = useState("GPR");
   const [acquisition, setAcquisition] = useState("EI");
   const [cadArtifact, setCadArtifact] = useState(null);
+  const [caeArtifact, setCaeArtifact] = useState(null);
+  const [caeRunning, setCaeRunning] = useState(false);
   const [apiPrediction, setApiPrediction] = useState(null);
   const design = useMemo(
     () => ({
@@ -362,6 +365,19 @@ function ModuleView({
   };
   const downloadCadArtifact = (path) => {
     if (path) window.open(api.artifactUrl(path), "_blank", "noopener,noreferrer");
+  };
+  const prepareCae = async () => {
+    setCaeRunning(true);
+    notify("OpenFOAM case queued · CAD → mesh setup → CHT handoff");
+    try {
+      const artifact = await api.prepareCae(cadDesign, false, setJobStatus);
+      setCaeArtifact(artifact);
+      notify("OpenFOAM case package ready · no CFD result claimed");
+    } catch {
+      notify("CAE queue unavailable · start Redis and the RQ worker");
+    } finally {
+      setCaeRunning(false);
+    }
   };
   if (active === "design")
     return (
@@ -661,6 +677,46 @@ function ModuleView({
               </div>
             ))}
           </div>
+        </section>
+        <section className="panel top-gap">
+          <div className="panel-title">
+            <div>
+              <h2>OpenFOAM CAE handoff</h2>
+              <p>Geometry, boundary conditions, meshing dictionaries, and guarded solver automation.</p>
+            </div>
+            <span className="tag">{caeArtifact ? "CASE GENERATED" : "NO CFD RESULT"}</span>
+          </div>
+          <div className="module-grid">
+            <div className="artifact">
+              <span>BACKGROUND JOB</span>
+              <code>{caeRunning ? "CAE job running" : jobStatus?.job_id ?? "Idle"}</code>
+              <small>{caeRunning ? "Worker is preparing the case" : jobStatus?.status ?? "Submit through Redis/RQ"}</small>
+            </div>
+            <div className="artifact">
+              <span>OPENFOAM CASE</span>
+              <code>{caeArtifact?.case_id ?? "Not generated"}</code>
+              <small>
+                {caeArtifact
+                  ? `${caeArtifact.solver_status} · validation required · results unavailable`
+                  : "Target solver: chtMultiRegionFoam"}
+              </small>
+            </div>
+          </div>
+          <button className="primary-action" disabled={caeRunning} onClick={prepareCae}>
+            {caeRunning ? "Preparing case…" : "Prepare OpenFOAM case package"} <span>→</span>
+          </button>
+          {caeArtifact && (
+            <button
+              className="outline-button"
+              onClick={() => downloadCadArtifact(caeArtifact.downloads.case_package)}
+            >
+              Download case ZIP <span>↓</span>
+            </button>
+          )}
+          <p className="disclaimer">
+            The reduced-order simulator above is not CFD. A generated case is also not a CAE result;
+            results remain unavailable until mesh validation and a successful OpenFOAM solver run.
+          </p>
         </section>
       </div>
     );
@@ -1318,6 +1374,7 @@ export default function Home() {
   const [workflowRunning, setWorkflowRunning] = useState(false);
   const [phase2Running, setPhase2Running] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
+  const [jobStatus, setJobStatus] = useState(null);
   useEffect(() => {
     api
       .health()
@@ -1332,7 +1389,7 @@ export default function Home() {
     setWorkflowRunning(true);
     notify(`${method} Phase 1 started · DOE → physics → ML → NSGA-II`);
     try {
-      const result = await api.runPhase1(method, runs);
+      const result = await api.runPhase1(method, runs, setJobStatus);
       setPhase1(result);
       setPhase2(null);
       setApiStatus("online");
@@ -1357,6 +1414,7 @@ export default function Home() {
         phase1.dataset_version,
         acquisition,
         3,
+        setJobStatus,
       );
       setPhase2(result);
       setApiStatus("online");
@@ -1454,6 +1512,7 @@ export default function Home() {
             runPhase2={runPhase2}
             workflowRunning={workflowRunning}
             phase2Running={phase2Running}
+            jobStatus={jobStatus}
           />
         )}
       </section>

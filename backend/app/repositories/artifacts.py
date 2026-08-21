@@ -67,3 +67,24 @@ class ArtifactRepository:
         if not path.exists():
             raise FileNotFoundError(filename)
         return path
+
+    def save_cae_artifact(self, case_id: str, filename: str, content: str | bytes) -> Path:
+        if Path(filename).name != filename:
+            raise ValueError("CAE artifact filename must not contain a path")
+        directory = self.root / "cae" / case_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+        if not path.exists():
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content, encoding="utf-8")
+        return path
+
+    def cae_artifact_path(self, case_id: str, filename: str) -> Path:
+        if Path(filename).name != filename:
+            raise FileNotFoundError(filename)
+        path = self.root / "cae" / case_id / filename
+        if not path.exists():
+            raise FileNotFoundError(filename)
+        return path

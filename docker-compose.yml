@@ -1,16 +1,46 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build: ./backend
     environment:
       THERMOFORM_ENV: development
       THERMOFORM_CORS_ORIGINS: http://localhost:3000
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+    volumes:
+      - thermoform-artifacts:/data
     ports:
       - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
       timeout: 3s
       retries: 5
+
+  worker:
+    build: ./backend
+    command: rq worker --url redis://redis:6379/0 thermoform
+    environment:
+      THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_ARTIFACT_DIR: /data
+    volumes:
+      - thermoform-artifacts:/data
+    depends_on:
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
@@ -22,3 +52,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  redis-data:
+  thermoform-artifacts:
