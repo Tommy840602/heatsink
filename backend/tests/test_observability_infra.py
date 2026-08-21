@@ -260,6 +260,8 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
     assert "restored historical remote-write samples" in drill
     assert "restored object-store fixture" in drill
     assert "upload_object_store_fixture" in drill
+    assert 'f"{os.getuid()}:{os.getgid()}"' in drill
+    assert '"/fixture"' in drill
     assert '"down", "--volumes", "--remove-orphans"' in drill
     assert "prometheus-data:" in compose
     assert "prometheus-2-data:" in compose

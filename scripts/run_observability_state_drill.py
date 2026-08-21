@@ -59,11 +59,11 @@ def state_tool(*args, check=True, capture_output=False):
     )
 
 
-def docker(*args, capture_output=False):
+def docker(*args, capture_output=False, check=True):
     return subprocess.run(
         ["docker", *args],
         cwd=ROOT,
-        check=True,
+        check=check,
         text=True,
         capture_output=capture_output,
     )
@@ -171,26 +171,42 @@ def upload_object_store_fixture(fixture_dir):
         "/work/fixture.prom",
         "/work/blocks",
     )
-    docker(
-        "run",
-        "--rm",
-        "--user",
-        "0:0",
-        "--volume",
-        f"{blocks_dir}:/blocks",
-        "--volume",
-        f"{resolve_volume('thanos-object-store-data')}:/thanos/object-store",
-        "--volume",
-        f"{ROOT / 'infra' / 'thanos' / 'object-store.yml'}:/etc/thanos/object-store.yml:ro",
-        "quay.io/thanos/thanos:v0.42.4",
-        "tools",
-        "bucket",
-        "--objstore.config-file=/etc/thanos/object-store.yml",
-        "upload-blocks",
-        "--path=/blocks",
-        '--label=cluster="thermoform-state-drill"',
-        '--label=replica="object-store-fixture"',
-    )
+    try:
+        docker(
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--volume",
+            f"{blocks_dir}:/blocks",
+            "--volume",
+            f"{resolve_volume('thanos-object-store-data')}:/thanos/object-store",
+            "--volume",
+            f"{ROOT / 'infra' / 'thanos' / 'object-store.yml'}:/etc/thanos/object-store.yml:ro",
+            "quay.io/thanos/thanos:v0.42.4",
+            "tools",
+            "bucket",
+            "--objstore.config-file=/etc/thanos/object-store.yml",
+            "upload-blocks",
+            "--path=/blocks",
+            '--label=cluster="thermoform-state-drill"',
+            '--label=replica="object-store-fixture"',
+        )
+    finally:
+        docker(
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--volume",
+            f"{fixture_dir}:/fixture",
+            "alpine:3.22",
+            "chown",
+            "-R",
+            f"{os.getuid()}:{os.getgid()}",
+            "/fixture",
+            check=False,
+        )
     return fixture_timestamp
 
 
