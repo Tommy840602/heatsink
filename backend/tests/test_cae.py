@@ -45,6 +45,8 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert manifest["not_cfd_result"] is True
         assert manifest["boundary_conditions"]["inlet_velocity_m_s"] == 2.8
         assert "closed fused" in manifest["geometry_contract"]
+        assert manifest["mesh_strategy"]["target_cells_through_fin_thickness"] == 2
+        assert manifest["mesh_strategy"]["per_region_quality_required"] is True
         allrun = archive.read("Allrun").decode()
         assert "surfaceCheck constant/triSurface/heatsink.stl" in allrun
         assert "checkMesh -allRegions" in allrun

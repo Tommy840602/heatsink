@@ -116,3 +116,79 @@ def validate_cae_run(
         },
         "residuals": residuals[-50:],
     }
+
+
+def validate_region_mesh(
+    mesh_log: str,
+    criteria: CaeAcceptanceCriteria | None = None,
+) -> dict[str, Any]:
+    criteria = criteria or CaeAcceptanceCriteria()
+    markers = list(
+        re.finditer(r"(?m)^Mesh stats[ \t]+(fluid|solid)[ \t]*$", mesh_log)
+    )
+    regions: dict[str, dict[str, Any]] = {}
+    for index, marker in enumerate(markers):
+        name = marker.group(1)
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(mesh_log)
+        section = mesh_log[marker.end() : end]
+        cell_count = _last_number(rf"(?m)^\s*cells:\s*({FLOAT})", section)
+        non_orthogonality = _last_number(
+            rf"non-orthogonality\s+Max:\s*({FLOAT})", section
+        )
+        skewness = _last_number(rf"Max\s+skewness\s*=\s*({FLOAT})", section)
+        concave_cells = _last_number(
+            rf"Concave cells.*?number of cells:\s*({FLOAT})", section
+        ) or 0.0
+        low_determinant_cells = _last_number(
+            rf"small determinant.*?number of cells:\s*({FLOAT})", section
+        ) or 0.0
+        denominator = max(cell_count or 0.0, 1.0)
+        concave_percent = concave_cells / denominator * 100
+        low_determinant_percent = low_determinant_cells / denominator * 100
+        passed = bool(
+            cell_count
+            and non_orthogonality is not None
+            and non_orthogonality <= criteria.max_non_orthogonality
+            and skewness is not None
+            and skewness <= criteria.max_skewness
+            and concave_percent <= criteria.max_concave_cell_percent
+            and low_determinant_percent <= criteria.max_low_determinant_cell_percent
+        )
+        regions[name] = {
+            "passed": passed,
+            "cell_count": int(cell_count) if cell_count is not None else None,
+            "max_non_orthogonality": non_orthogonality,
+            "max_skewness": skewness,
+            "concave_cells": int(concave_cells),
+            "concave_cell_percent": concave_percent,
+            "low_determinant_cells": int(low_determinant_cells),
+            "low_determinant_cell_percent": low_determinant_percent,
+        }
+
+    geometry_closed = "Surface is closed. All edges connected to two faces." in mesh_log
+    regions_split = bool(
+        re.search(r"Number of regions:\s*2", mesh_log)
+        and "fluid_to_solid" in mesh_log
+        and "solid_to_fluid" in mesh_log
+        and set(regions) == {"fluid", "solid"}
+    )
+    region_quality = bool(
+        set(regions) == {"fluid", "solid"}
+        and all(item["passed"] for item in regions.values())
+    )
+    acceptance_passed = bool(geometry_closed and regions_split and region_quality)
+    return {
+        "acceptance_passed": acceptance_passed,
+        "gates": {
+            "watertight_union_geometry": geometry_closed,
+            "region_interfaces": regions_split,
+            "region_mesh_quality": region_quality,
+        },
+        "limits": {
+            "max_non_orthogonality": criteria.max_non_orthogonality,
+            "max_skewness": criteria.max_skewness,
+            "max_concave_cell_percent": criteria.max_concave_cell_percent,
+            "max_low_determinant_cell_percent": criteria.max_low_determinant_cell_percent,
+        },
+        "regions": regions,
+    }

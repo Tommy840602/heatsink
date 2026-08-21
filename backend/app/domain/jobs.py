@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class JobCreateRequest(BaseModel):
-    task: Literal["phase1", "phase2", "cae", "cae_benchmark"]
+    task: Literal["phase1", "phase2", "cae", "cae_mesh", "cae_benchmark"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

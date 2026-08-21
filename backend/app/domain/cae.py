@@ -19,10 +19,18 @@ class CaeAcceptanceCriteria(BaseModel):
     max_skewness: float = Field(default=4.0, gt=0.0, le=100.0)
     max_final_residual: float = Field(default=1e-4, gt=0.0, le=0.1)
     max_energy_imbalance_percent: float = Field(default=5.0, gt=0.0, le=50.0)
+    max_concave_cell_percent: float = Field(default=5.0, ge=0.0, le=25.0)
+    max_low_determinant_cell_percent: float = Field(default=0.0, ge=0.0, le=10.0)
     min_residual_samples: int = Field(default=3, ge=1, le=1000)
 
 
 class OpenFoamBenchmarkRequest(BaseModel):
     tutorial: Literal["multiRegionHeater"] = "multiRegionHeater"
+    max_runtime_seconds: int = Field(default=1800, ge=30, le=7200)
+    criteria: CaeAcceptanceCriteria = Field(default_factory=CaeAcceptanceCriteria)
+
+
+class OpenFoamMeshRequest(BaseModel):
+    design: DesignParameters
     max_runtime_seconds: int = Field(default=1800, ge=30, le=7200)
     criteria: CaeAcceptanceCriteria = Field(default_factory=CaeAcceptanceCriteria)

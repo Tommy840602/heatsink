@@ -1,5 +1,5 @@
 from app.domain.cae import CaeAcceptanceCriteria
-from app.services.cae_validation import validate_cae_run
+from app.services.cae_validation import validate_cae_run, validate_region_mesh
 
 
 CHECK_MESH_OK = """
@@ -54,3 +54,52 @@ End
     report = validate_cae_run(CHECK_MESH_OK, solver_log)
 
     assert set(report["gates"]["convergence"]["latest_by_field"]) == {"p_rgh", "h"}
+
+
+def test_region_mesh_acceptance_uses_each_region_and_explicit_cell_percentages():
+    mesh_log = """
+Surface is closed. All edges connected to two faces.
+Number of regions:2
+fluid_to_solid
+solid_to_fluid
+Mesh stats fluid
+    cells: 1424649
+Mesh non-orthogonality Max: 56.74701 average: 7.35
+Max skewness = 1.760847 OK.
+Concave cells (using face planes) found, number of cells: 38762
+Failed 1 mesh checks.
+Mesh stats solid
+    cells: 550744
+Mesh non-orthogonality Max: 51.48685 average: 8.15
+Max skewness = 1.260805 OK.
+Concave cells (using face planes) found, number of cells: 25176
+Failed 1 mesh checks.
+"""
+    report = validate_region_mesh(mesh_log)
+
+    assert report["acceptance_passed"] is True
+    assert round(report["regions"]["fluid"]["concave_cell_percent"], 3) == 2.721
+    assert round(report["regions"]["solid"]["concave_cell_percent"], 3) == 4.571
+    assert report["regions"]["solid"]["low_determinant_cells"] == 0
+
+
+def test_region_mesh_rejects_low_determinant_cells():
+    mesh_log = """
+Surface is closed. All edges connected to two faces.
+Number of regions:2
+fluid_to_solid solid_to_fluid
+Mesh stats fluid
+cells: 1000
+Mesh non-orthogonality Max: 30 average: 5
+Max skewness = 1 OK.
+Mesh stats solid
+cells: 1000
+Mesh non-orthogonality Max: 30 average: 5
+Max skewness = 1 OK.
+Cells with small determinant (< 0.001) found, number of cells: 1
+"""
+    report = validate_region_mesh(mesh_log)
+
+    assert report["regions"]["fluid"]["passed"] is True
+    assert report["regions"]["solid"]["passed"] is False
+    assert report["acceptance_passed"] is False

@@ -14,10 +14,10 @@ from app.repositories.artifacts import ArtifactRepository
 from app.services.cad import generate_cad
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v2"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v5"
 
 
-def _required_commands(solver: str) -> list[str]:
+def mesh_required_commands() -> list[str]:
     return [
         "surfaceTransformPoints",
         "surfaceCheck",
@@ -26,8 +26,11 @@ def _required_commands(solver: str) -> list[str]:
         "snappyHexMesh",
         "checkMesh",
         "splitMeshRegions",
-        solver,
     ]
+
+
+def _required_commands(solver: str) -> list[str]:
+    return [*mesh_required_commands(), solver]
 
 
 def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[str, str]:
@@ -47,9 +50,12 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
         "z_min": -0.005,
         "z_max": height_m + 0.03,
     }
+    y_background_target_m = design.fin_thickness * 2 / 1000
     cells = {
         "x": max(36, round((domain["x_max"] - domain["x_min"]) / 0.003)),
-        "y": max(30, round((domain["y_max"] - domain["y_min"]) / 0.002)),
+        "y": max(
+            30, round((domain["y_max"] - domain["y_min"]) / y_background_target_m)
+        ),
         "z": max(24, round((domain["z_max"] - domain["z_min"]) / 0.002)),
     }
     manifest = {
@@ -64,6 +70,12 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
         },
         "geometry_units": "STL source is millimetres; Allrun scales it to metres",
         "geometry_contract": "closed fused base-and-fin union, fully enclosed by the fluid domain",
+        "mesh_strategy": {
+            "background_cells": cells,
+            "surface_refinement_level": 2,
+            "target_cells_through_fin_thickness": 2,
+            "per_region_quality_required": True,
+        },
         "case_validated": False,
         "results_available": False,
         "not_cfd_result": True,
@@ -164,7 +176,7 @@ mergeTolerance 1e-6;
         "system/blockMeshDict": block_mesh,
         "system/surfaceFeatureExtractDict": surface_features,
         "system/snappyHexMeshDict": snappy,
-        "system/meshQualityDict": "maxNonOrtho 65; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 80; minVol 1e-13; minTetQuality 1e-15; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.05; minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 4; errorReduction 0.75;\n",
+        "system/meshQualityDict": "maxNonOrtho 65; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 60; minVol 1e-13; minTetQuality 1e-15; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.05; minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 8; errorReduction 0.5;\n",
         "constant/regionProperties": "FoamFile { version 2.0; format ascii; class dictionary; object regionProperties; }\nregions ( fluid (fluid) solid (solid) );\n",
         "constant/triSurface/heatsink-mm.stl": stl,
     }

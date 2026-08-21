@@ -49,4 +49,12 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = run_openfoam_benchmark(OpenFoamBenchmarkRequest.model_validate(payload), repository)
         _progress(100, "completed")
         return result
+    if task == "cae_mesh":
+        from app.domain.cae import OpenFoamMeshRequest
+        from app.services.openfoam_mesh import run_openfoam_mesh
+
+        _progress(10, "generating_watertight_geometry")
+        result = run_openfoam_mesh(OpenFoamMeshRequest.model_validate(payload), repository)
+        _progress(100, "completed")
+        return result
     raise ValueError(f"Unsupported job task: {task}")
