@@ -32,7 +32,7 @@ class RqJobQueue:
         job = self.queue.enqueue_call(
             func=execute_job,
             args=(task, payload),
-            meta={"task": task},
+            meta={"task": task, "progress": 0, "stage": "queued"},
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -54,6 +54,8 @@ class RqJobQueue:
             "ended_at": _timestamp(job.ended_at),
             "result": job.result if status == "finished" else None,
             "error": job.exc_info.splitlines()[-1] if status == "failed" and job.exc_info else None,
+            "progress": job.meta.get("progress", 0),
+            "stage": job.meta.get("stage", status),
         }
 
 

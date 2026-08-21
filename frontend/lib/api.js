@@ -90,6 +90,22 @@ export const api = {
       },
       onStatus,
     ),
+  runCaeBenchmark: (onStatus) =>
+    runJob(
+      "cae_benchmark",
+      {
+        tutorial: "multiRegionHeater",
+        max_runtime_seconds: 1800,
+        criteria: {
+          max_non_orthogonality: 65,
+          max_skewness: 4,
+          max_final_residual: 0.0001,
+          max_energy_imbalance_percent: 5,
+          min_residual_samples: 3,
+        },
+      },
+      onStatus,
+    ),
   generateCad: (design) =>
     request("/cad/generate", {
       method: "POST",

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class JobCreateRequest(BaseModel):
-    task: Literal["phase1", "phase2", "cae"]
+    task: Literal["phase1", "phase2", "cae", "cae_benchmark"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -17,3 +17,5 @@ class JobSnapshot(BaseModel):
     ended_at: str | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: int = Field(default=0, ge=0, le=100)
+    stage: str = "queued"

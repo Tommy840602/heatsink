@@ -142,7 +142,7 @@ def _zip_files(files: dict[str, str]) -> bytes:
 
 
 def _execute_if_requested(
-    request: OpenFoamCaseRequest, files: dict[str, str]
+    request: OpenFoamCaseRequest, files: dict[str, str], solver_ready: bool
 ) -> tuple[str, str | None]:
     if not request.run_solver:
         return "not_requested", None
@@ -150,6 +150,11 @@ def _execute_if_requested(
     missing = [command for command in required if shutil.which(command) is None]
     if missing:
         return "solver_unavailable", f"Missing OpenFOAM commands: {', '.join(missing)}"
+    if not solver_ready:
+        return (
+            "validation_required",
+            "Execution blocked: this generated heat-sink case is a preprocessing starter and has not passed geometry, interface, field, and material validation.",
+        )
     with tempfile.TemporaryDirectory(prefix="thermoform-openfoam-") as temporary:
         root = Path(temporary)
         for filename, content in files.items():
@@ -191,7 +196,9 @@ def prepare_openfoam_case(
     }
     case_id = repository.version(fingerprint, "cae")
     files = _case_files(request, stl, case_id)
-    solver_status, solver_log = _execute_if_requested(request, files)
+    geometry_validated = bool(cad["freecad_executed"] and cad["stl_generator"] == "FreeCAD")
+    solver_ready = False
+    solver_status, solver_log = _execute_if_requested(request, files, solver_ready)
     openfoam_available = all(shutil.which(command) is not None for command in _required_commands(request.solver))
     package_name = f"{case_id}.zip"
     repository.save_cae_artifact(case_id, package_name, _zip_files(files))
@@ -201,6 +208,8 @@ def prepare_openfoam_case(
         "case_id": case_id,
         "case_generated": True,
         "case_validated": False,
+        "geometry_validated": geometry_validated,
+        "solver_ready": solver_ready,
         "template_version": OPENFOAM_TEMPLATE_VERSION,
         "openfoam_available": openfoam_available,
         "solver_requested": request.run_solver,
@@ -216,6 +225,15 @@ def prepare_openfoam_case(
             "solver_log": f"/api/v1/cae/{case_id}/artifacts/solver.log" if solver_log else None,
         },
         "notice": "OpenFOAM preprocessing package generated. No CFD/CAE result exists until the case is validated and a solver run completes successfully.",
+        "validation_gates": {
+            "watertight_union_geometry": geometry_validated,
+            "region_interfaces": False,
+            "initial_and_boundary_fields": False,
+            "material_properties": False,
+            "mesh_quality": False,
+            "convergence": False,
+            "energy_balance": False,
+        },
     }
     repository.save_cae_artifact(case_id, "metadata.json", json.dumps(result, indent=2, sort_keys=True))
     return result

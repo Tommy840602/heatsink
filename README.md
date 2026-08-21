@@ -6,6 +6,8 @@ Phase 2 adds iterative Bayesian Optimization and FreeCAD-compatible parametric C
 
 Phase 3 moves long workflows to Redis/RQ workers and adds a traceable OpenFOAM CHT case handoff. Case generation is never reported as a CFD result: mesh validation, a successful solver run, convergence checks, and result parsing are separate states.
 
+Phase 3.1 adds an official `multiRegionHeater` environment benchmark plus machine-readable mesh quality, convergence, energy-balance, and response-metric acceptance gates. Passing the tutorial proves the OpenFOAM runtime path only; it does not create a heat-sink CFD result.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -24,6 +26,7 @@ Browser
                  ├─ EI / PI / UCB Bayesian learning loop
                  ├─ FreeCAD script + STEP/STL artifact adapter
                  ├─ OpenFOAM CHT case packaging and guarded execution
+                 ├─ OpenFOAM v2312 tutorial benchmark + acceptance parser
                  └─ versioned dataset and model artifacts
 ```
 
@@ -84,7 +87,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
 | `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
 | `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
-| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, or CAE work and return `202` |
+| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, CAE, or `cae_benchmark` work and return `202` |
 | `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
@@ -110,6 +113,10 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the exact parametric STL, case manifest, `blockMesh`, `snappyHexMesh`, region-splitting setup, and a fail-fast `Allrun` script targeting `chtMultiRegionFoam`.
 - Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
+- Heat-sink solver execution is blocked while union geometry, interfaces, fields, material properties, mesh quality, convergence, or energy balance remain unvalidated.
+- The benchmark worker targets the official OpenCFD OpenFOAM v2312 `multiRegionHeater` tutorial. Start the worker from a sourced OpenFOAM shell and expose either `FOAM_TUTORIALS` or `THERMOFORM_OPENFOAM_BENCHMARK_CASE`.
+- A tutorial benchmark passes only after successful execution, `Mesh OK`, mesh limits, an `End` marker, and converged final residuals. It still returns `results_available=false` because it is not the optimized heat-sink geometry.
+- A design result additionally requires standardized `THERMOFORM_METRIC` values for `t_max_c`, `pressure_drop_pa`, `heat_in_w`, and `heat_out_w`; the energy imbalance must remain within the configured limit.
 
 ## Verification
 

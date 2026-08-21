@@ -1,0 +1,42 @@
+from app.domain.cae import CaeAcceptanceCriteria
+from app.services.cae_validation import validate_cae_run
+
+
+CHECK_MESH_OK = """
+Mesh stats
+    cells:            184320
+Mesh non-orthogonality Max: 42 average: 8.4
+Max skewness = 2.1 OK.
+Mesh OK.
+"""
+
+
+SOLVER_OK = """
+Solving for T, Initial residual = 0.01, Final residual = 0.001, No Iterations 2
+Solving for p_rgh, Initial residual = 0.02, Final residual = 0.0008, No Iterations 2
+Solving for T, Initial residual = 0.001, Final residual = 0.00001, No Iterations 1
+Solving for p_rgh, Initial residual = 0.0008, Final residual = 0.00002, No Iterations 1
+THERMOFORM_METRIC t_max_c=71.4 pressure_drop_pa=18.2 heat_in_w=100 heat_out_w=98.5
+End
+"""
+
+
+def test_cae_acceptance_requires_and_passes_all_four_gates():
+    report = validate_cae_run(
+        CHECK_MESH_OK,
+        SOLVER_OK,
+        CaeAcceptanceCriteria(min_residual_samples=4),
+    )
+    assert report["acceptance_passed"] is True
+    assert report["gates"]["mesh_quality"]["cell_count"] == 184320
+    assert report["gates"]["convergence"]["max_final_residual"] == 0.00002
+    assert report["gates"]["energy_balance"]["imbalance_percent"] == 1.5
+    assert report["gates"]["response_metrics"]["t_max_c"] == 71.4
+
+
+def test_cae_acceptance_rejects_missing_energy_and_response_metrics():
+    report = validate_cae_run(CHECK_MESH_OK, SOLVER_OK.split("THERMOFORM_METRIC")[0] + "End\n")
+    assert report["gates"]["mesh_quality"]["passed"] is True
+    assert report["gates"]["energy_balance"]["passed"] is False
+    assert report["gates"]["response_metrics"]["passed"] is False
+    assert report["acceptance_passed"] is False

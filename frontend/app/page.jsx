@@ -257,6 +257,7 @@ function ModuleView({
   workflowRunning,
   phase2Running,
   jobStatus,
+  setJobStatus,
 }) {
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
@@ -269,6 +270,8 @@ function ModuleView({
   const [cadArtifact, setCadArtifact] = useState(null);
   const [caeArtifact, setCaeArtifact] = useState(null);
   const [caeRunning, setCaeRunning] = useState(false);
+  const [benchmarkArtifact, setBenchmarkArtifact] = useState(null);
+  const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [apiPrediction, setApiPrediction] = useState(null);
   const design = useMemo(
     () => ({
@@ -377,6 +380,23 @@ function ModuleView({
       notify("CAE queue unavailable · start Redis and the RQ worker");
     } finally {
       setCaeRunning(false);
+    }
+  };
+  const runCaeBenchmark = async () => {
+    setBenchmarkRunning(true);
+    notify("OpenFOAM benchmark queued · mesh → solver → acceptance gates");
+    try {
+      const artifact = await api.runCaeBenchmark(setJobStatus);
+      setBenchmarkArtifact(artifact);
+      notify(
+        artifact.benchmark_validated
+          ? "OpenFOAM benchmark passed every acceptance gate"
+          : "Benchmark finished without a validated CFD result",
+      );
+    } catch {
+      notify("OpenFOAM benchmark worker unavailable");
+    } finally {
+      setBenchmarkRunning(false);
     }
   };
   if (active === "design")
@@ -689,8 +709,8 @@ function ModuleView({
           <div className="module-grid">
             <div className="artifact">
               <span>BACKGROUND JOB</span>
-              <code>{caeRunning ? "CAE job running" : jobStatus?.job_id ?? "Idle"}</code>
-              <small>{caeRunning ? "Worker is preparing the case" : jobStatus?.status ?? "Submit through Redis/RQ"}</small>
+              <code>{caeRunning || benchmarkRunning ? `${jobStatus?.progress ?? 0}%` : jobStatus?.job_id ?? "Idle"}</code>
+              <small>{jobStatus?.stage?.replaceAll("_", " ") ?? "Submit through Redis/RQ"}</small>
             </div>
             <div className="artifact">
               <span>OPENFOAM CASE</span>
@@ -711,6 +731,39 @@ function ModuleView({
               onClick={() => downloadCadArtifact(caeArtifact.downloads.case_package)}
             >
               Download case ZIP <span>↓</span>
+            </button>
+          )}
+          <div className="panel-title top-gap">
+            <div>
+              <h2>Official tutorial benchmark</h2>
+              <p>OpenCFD v2312 multiRegionHeater · environment proof, not a heat-sink result.</p>
+            </div>
+            <span className="tag">
+              {benchmarkArtifact?.benchmark_validated ? "VALIDATED" : benchmarkArtifact ? "NOT VALIDATED" : "PENDING"}
+            </span>
+          </div>
+          <div className="validation-grid">
+            {[
+              ["Mesh quality", benchmarkArtifact?.validation.gates.mesh_quality],
+              ["Convergence", benchmarkArtifact?.validation.gates.convergence],
+              ["Energy balance", benchmarkArtifact?.validation.gates.energy_balance],
+              ["Response metrics", benchmarkArtifact?.validation.gates.response_metrics],
+            ].map(([label, gate]) => (
+              <div className={`validation-gate ${gate?.passed ? "gate-pass" : "gate-pending"}`} key={label}>
+                <i>{gate?.passed ? "✓" : "—"}</i>
+                <span><b>{label}</b><small>{gate ? (gate.passed ? "Acceptance passed" : "Missing or above limit") : "Not evaluated"}</small></span>
+              </div>
+            ))}
+          </div>
+          <button className="outline-button" disabled={benchmarkRunning} onClick={runCaeBenchmark}>
+            {benchmarkRunning ? "Running benchmark…" : "Run OpenFOAM benchmark"} <span>→</span>
+          </button>
+          {benchmarkArtifact && (
+            <button
+              className="outline-button"
+              onClick={() => downloadCadArtifact(benchmarkArtifact.downloads.report)}
+            >
+              Download validation report <span>↓</span>
             </button>
           )}
           <p className="disclaimer">
@@ -1513,6 +1566,7 @@ export default function Home() {
             workflowRunning={workflowRunning}
             phase2Running={phase2Running}
             jobStatus={jobStatus}
+            setJobStatus={setJobStatus}
           />
         )}
       </section>
