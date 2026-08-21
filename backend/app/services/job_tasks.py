@@ -57,4 +57,12 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = run_openfoam_mesh(OpenFoamMeshRequest.model_validate(payload), repository)
         _progress(100, "completed")
         return result
+    if task == "cae_smoke":
+        from app.domain.cae import OpenFoamSmokeRequest
+        from app.services.openfoam_smoke import run_openfoam_smoke
+
+        _progress(10, "meshing_and_initializing_cht_fields")
+        result = run_openfoam_smoke(OpenFoamSmokeRequest.model_validate(payload), repository)
+        _progress(100, "completed")
+        return result
     raise ValueError(f"Unsupported job task: {task}")

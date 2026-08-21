@@ -12,6 +12,8 @@ Phase 3.2 replaces the overlapping fallback boxes with a watertight fused heat-s
 
 Phase 3.3 adds the `cae_mesh` worker task and per-region mesh qualification. The production candidate resolves a 0.5 mm fin with approximately two cells through its thickness and rejects low-determinant cells while reporting configurable non-orthogonality, skewness, and concave-cell percentage limits separately for fluid and solid regions.
 
+Phase 3.4 packages compressible laminar air, isotropic aluminum, inlet/outlet fields, an implicit coupled temperature interface, and an absolute solid-region heat source. The isolated `cae_smoke` task executes one 10 µs `chtMultiRegionFoam` step to validate the field/material contract without presenting the transient state as a converged design result.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -98,7 +100,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 | `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
 | `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
 | `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
-| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, `cae`, `cae_mesh`, or `cae_benchmark` work and return `202` |
+| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, `cae`, `cae_mesh`, `cae_smoke`, or `cae_benchmark` work and return `202` |
 | `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/{case_id}/artifacts/{filename}` | Download the case ZIP or solver log |
@@ -122,11 +124,12 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 ## Async jobs and OpenFOAM handoff
 
 - The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
-- Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
+- Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, and a fail-fast preprocessing `Allrun`; it stops before `chtMultiRegionFoam` until fields and material gates are implemented.
 - Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
 - `cae_mesh` executes the package on the OpenFOAM worker and persists immutable `mesh.log` and `mesh-report.json` artifacts. Passing means the configured preprocessing gates passed; `results_available` remains false because no thermal solution exists yet.
+- `cae_smoke` first enforces the same mesh gates, then requires both thermo regions, the configured `heatSource`, coupled energy, momentum/pressure fields, clean solver termination, and persisted `smoke.log`/`smoke-report.json` artifacts. A pass validates startup compatibility only; it never exposes CFD response metrics.
 - Heat-sink solver execution is blocked while union geometry, interfaces, fields, material properties, mesh quality, convergence, or energy balance remain unvalidated.
 - The benchmark worker targets the official OpenCFD OpenFOAM v2312 `multiRegionHeater` tutorial. Start the worker from a sourced OpenFOAM shell and expose either `FOAM_TUTORIALS` or `THERMOFORM_OPENFOAM_BENCHMARK_CASE`.
 - A tutorial benchmark passes only after successful execution, `Mesh OK`, mesh limits, an `End` marker, and converged final residuals. It still returns `results_available=false` because it is not the optimized heat-sink geometry.

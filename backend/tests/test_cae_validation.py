@@ -1,5 +1,9 @@
 from app.domain.cae import CaeAcceptanceCriteria
-from app.services.cae_validation import validate_cae_run, validate_region_mesh
+from app.services.cae_validation import (
+    validate_cae_run,
+    validate_region_mesh,
+    validate_solver_smoke,
+)
 
 
 CHECK_MESH_OK = """
@@ -103,3 +107,28 @@ Cells with small determinant (< 0.001) found, number of cells: 1
     assert report["regions"]["fluid"]["passed"] is True
     assert report["regions"]["solid"]["passed"] is False
     assert report["acceptance_passed"] is False
+
+
+def test_solver_smoke_requires_both_regions_momentum_enthalpy_and_clean_end():
+    solver_log = """
+Solving for fluid region fluid
+Source: heatSource
+PBiCGStab: Solving for Ux, Initial residual = 0.1, Final residual = 0.001
+Solving energy coupled regions
+PBiCGStab: Solving for h, Initial residual = 0.1, Final residual = 0.001
+Create solid mesh for region solid for time = 0
+PCG: Solving for h, Initial residual = 0.1, Final residual = 0.001
+End
+"""
+    report = validate_solver_smoke(solver_log)
+
+    assert report["passed"] is True
+    assert report["solved_fields"] == ["Ux", "h"]
+    assert report["residual_sample_count"] == 3
+
+
+def test_solver_smoke_rejects_fatal_or_incomplete_run():
+    report = validate_solver_smoke("Solving for fluid region fluid\nFOAM FATAL ERROR\n")
+
+    assert report["passed"] is False
+    assert report["fatal_error"] is True

@@ -14,7 +14,11 @@ CAE_QUEUE_NAME = "thermoform-cae"
 
 
 def queue_name_for_task(task: str) -> str:
-    return CAE_QUEUE_NAME if task in {"cae", "cae_mesh", "cae_benchmark"} else DEFAULT_QUEUE_NAME
+    return (
+        CAE_QUEUE_NAME
+        if task in {"cae", "cae_mesh", "cae_smoke", "cae_benchmark"}
+        else DEFAULT_QUEUE_NAME
+    )
 
 
 class JobQueue(Protocol):

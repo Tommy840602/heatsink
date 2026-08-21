@@ -12,9 +12,10 @@ from app.domain.cae import OpenFoamCaseRequest
 from app.domain.phase2 import CadGenerationRequest
 from app.repositories.artifacts import ArtifactRepository
 from app.services.cad import generate_cad
+from app.services.openfoam_thermal_case import thermal_case_files
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v5"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v6"
 
 
 def mesh_required_commands() -> list[str]:
@@ -26,6 +27,7 @@ def mesh_required_commands() -> list[str]:
         "snappyHexMesh",
         "checkMesh",
         "splitMeshRegions",
+        "changeDictionary",
     ]
 
 
@@ -76,6 +78,13 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
             "target_cells_through_fin_thickness": 2,
             "per_region_quality_required": True,
         },
+        "field_contract": {
+            "fluid": "compressible laminar air",
+            "solid": "Al 6063-style isotropic thermal properties",
+            "interface": "implicit coupled temperature",
+            "heat_source": "absolute sensible-enthalpy source in the entire solid region",
+            "smoke_solve_only": True,
+        },
         "case_validated": False,
         "results_available": False,
         "not_cfd_result": True,
@@ -85,18 +94,19 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
 Case: {case_id}
 Target solver: {request.solver}
 
-This package contains the exact heat-sink STL, boundary-condition manifest, a
-background mesh, and snappyHexMesh/region-splitting automation. It is an
-engineering handoff template, not a validated production mesh or CFD result.
+This package contains the exact heat-sink STL, boundary-condition manifest,
+snappyHexMesh/region-splitting automation, air and aluminum material models,
+initial fields, coupled interface conditions, and an absolute solid heat source.
+It is an engineering handoff template, not a converged CFD result.
 
 Before accepting results, an analyst must inspect mesh quality and interfaces,
 select turbulence/wall treatment for the target OpenFOAM distribution, confirm
 material properties, and perform mesh-independence and convergence studies.
 
-Run `./Allrun` inside an initialized OpenFOAM environment. The script deliberately
-stops after two-region mesh checks. Thermal fields, material dictionaries, solver
-execution, and response extraction are the next validation stage and are not
-silently synthesized by this preprocessing package.
+Run `./Allrun` inside an initialized OpenFOAM environment to mesh, split regions,
+initialize fields, apply boundary dictionaries, and check both region meshes.
+`./Allsolve` performs a one-step field/material smoke solve only. Convergence,
+energy balance, response extraction, and mesh-independence remain mandatory.
 """
     allrun = f"""#!/bin/sh
 set -eu
@@ -107,17 +117,28 @@ blockMesh
 surfaceFeatureExtract
 snappyHexMesh -overwrite
 checkMesh -allGeometry -allTopology
+cp -R 0.orig 0
 splitMeshRegions -cellZones -overwrite
+for field in U alphat epsilon k p_rgh; do
+  rm -f "0/solid/$field"
+done
+changeDictionary -region fluid
+changeDictionary -region solid
 checkMesh -allRegions -allGeometry -allTopology
-echo 'Preprocessing complete; solver execution remains validation-gated.'
+echo 'Preprocessing and field initialization complete.'
+"""
+    allsolve = f"""#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+{request.solver} | tee log.{request.solver}
 """
     control_dict = f"""FoamFile
 {{ version 2.0; format ascii; class dictionary; object controlDict; }}
 application {request.solver};
-startFrom startTime; startTime 0; stopAt endTime; endTime 500;
-deltaT 1; writeControl timeStep; writeInterval 100;
-purgeWrite 2; writeFormat ascii; writePrecision 7;
-runTimeModifiable true;
+startFrom startTime; startTime 0; stopAt endTime; endTime 0.00001;
+deltaT 0.00001; writeControl timeStep; writeInterval 1;
+purgeWrite 1; writeFormat ascii; writePrecision 7;
+runTimeModifiable false; adjustTimeStep false; maxCo 0.3; maxDi 10;
 """
     block_mesh = f"""FoamFile
 {{ version 2.0; format ascii; class dictionary; object blockMeshDict; }}
@@ -166,10 +187,11 @@ addLayersControls {{ relativeSizes true; layers {{}}; expansionRatio 1.0; finalL
 meshQualityControls {{ #include "meshQualityDict" }}
 mergeTolerance 1e-6;
 """
-    return {
+    files = {
         "README.md": readme,
         "case.json": json.dumps(manifest, indent=2, sort_keys=True),
         "Allrun": allrun,
+        "Allsolve": allsolve,
         "system/controlDict": control_dict,
         "system/fvSchemes": "FoamFile { version 2.0; format ascii; class dictionary; object fvSchemes; }\nddtSchemes {}\ngradSchemes {}\ndivSchemes {}\nlaplacianSchemes {}\ninterpolationSchemes {}\nsnGradSchemes {}\n",
         "system/fvSolution": "FoamFile { version 2.0; format ascii; class dictionary; object fvSolution; }\nPIMPLE { nOuterCorrectors 1; }\n",
@@ -180,6 +202,8 @@ mergeTolerance 1e-6;
         "constant/regionProperties": "FoamFile { version 2.0; format ascii; class dictionary; object regionProperties; }\nregions ( fluid (fluid) solid (solid) );\n",
         "constant/triSurface/heatsink-mm.stl": stl,
     }
+    files.update(thermal_case_files(request))
+    return files
 
 
 def _zip_files(files: dict[str, str]) -> bytes:
@@ -187,7 +211,9 @@ def _zip_files(files: dict[str, str]) -> bytes:
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for filename, content in files.items():
             info = zipfile.ZipInfo(filename)
-            info.external_attr = (0o755 if filename == "Allrun" else 0o644) << 16
+            info.external_attr = (
+                0o755 if filename in {"Allrun", "Allsolve"} else 0o644
+            ) << 16
             archive.writestr(info, content)
     return output.getvalue()
 

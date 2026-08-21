@@ -192,3 +192,57 @@ def validate_region_mesh(
         },
         "regions": regions,
     }
+
+
+def validate_solver_smoke(solver_log: str) -> dict[str, Any]:
+    fatal_error = bool(re.search(r"FOAM FATAL", solver_log, flags=re.IGNORECASE))
+    end_marker = bool(re.search(r"(?:^|\n)End\s*(?:\n|$)", solver_log))
+    fluid_region = bool(
+        re.search(
+            r"(?:fluid region[ \t]+fluid|fluid mesh for region[ \t]+fluid)",
+            solver_log,
+            re.IGNORECASE,
+        )
+    )
+    solid_region = bool(
+        re.search(
+            r"(?:solid region[ \t]+solid|solid mesh for region[ \t]+solid)",
+            solver_log,
+            re.IGNORECASE,
+        )
+    )
+    residual_fields = re.findall(
+        r"Solving for[ \t]+([^,\r\n]+),[ \t]+Initial residual", solver_log, re.IGNORECASE
+    )
+    solved_fields = sorted({field.strip() for field in residual_fields})
+    enthalpy_solved = "h" in solved_fields
+    momentum_solved = any(field in solved_fields for field in ("Ux", "Uy", "Uz", "U"))
+    heat_source_initialized = bool(
+        re.search(r"Source:\s*heatSource", solver_log, flags=re.IGNORECASE)
+    )
+    coupled_energy_solved = bool(
+        re.search(r"Solving energy coupled regions", solver_log, flags=re.IGNORECASE)
+    )
+    passed = bool(
+        not fatal_error
+        and end_marker
+        and fluid_region
+        and solid_region
+        and enthalpy_solved
+        and momentum_solved
+        and heat_source_initialized
+        and coupled_energy_solved
+    )
+    return {
+        "passed": passed,
+        "fatal_error": fatal_error,
+        "end_marker": end_marker,
+        "fluid_region_initialized": fluid_region,
+        "solid_region_initialized": solid_region,
+        "enthalpy_solved": enthalpy_solved,
+        "momentum_solved": momentum_solved,
+        "heat_source_initialized": heat_source_initialized,
+        "coupled_energy_solved": coupled_energy_solved,
+        "residual_sample_count": len(residual_fields),
+        "solved_fields": solved_fields,
+    }

@@ -36,9 +36,17 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
             "README.md",
             "case.json",
             "Allrun",
+            "Allsolve",
+            "0.orig/T",
+            "0.orig/U",
             "system/blockMeshDict",
             "system/snappyHexMeshDict",
+            "system/fluid/changeDictionaryDict",
+            "system/solid/changeDictionaryDict",
             "constant/regionProperties",
+            "constant/fluid/thermophysicalProperties",
+            "constant/solid/thermophysicalProperties",
+            "constant/solid/fvOptions",
             "constant/triSurface/heatsink-mm.stl",
         } <= names
         manifest = json.loads(archive.read("case.json"))
@@ -47,10 +55,14 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
         assert "closed fused" in manifest["geometry_contract"]
         assert manifest["mesh_strategy"]["target_cells_through_fin_thickness"] == 2
         assert manifest["mesh_strategy"]["per_region_quality_required"] is True
+        assert manifest["field_contract"]["smoke_solve_only"] is True
         allrun = archive.read("Allrun").decode()
         assert "surfaceCheck constant/triSurface/heatsink.stl" in allrun
         assert "checkMesh -allRegions" in allrun
         assert "chtMultiRegionFoam |" not in allrun
+        assert "changeDictionary -region fluid" in allrun
+        assert "changeDictionary -region solid" in allrun
+        assert "chtMultiRegionFoam" in archive.read("Allsolve").decode()
         block_mesh = archive.read("system/blockMeshDict").decode()
         assert "(-0.030000 -0.010000 -0.005000)" in block_mesh
         assert "0.130000" in block_mesh
