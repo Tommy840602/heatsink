@@ -46,6 +46,8 @@ Phase 3.19 makes external notification delivery deployable. A strict runtime ren
 
 Phase 3.20 establishes observability-state durability. Prometheus keeps at most 30 days and 8 GB of TSDB data, bounding local storage while reserving host capacity for compaction headroom, and Alertmanager explicitly retains state for 120 hours. Native storage and snapshot-maintenance metrics drive capacity, retention-drift, and persistence alerts. An offline-only backup tool archives the project-scoped Prometheus and Alertmanager volumes with SHA-256 manifests and restores only into empty volumes; a real drill proves an Alertmanager silence survives volume destruction and reconstruction.
 
+Phase 3.21 removes the single Alertmanager process from the notification path. Prometheus sends every alert directly to two gossip-clustered Alertmanager replicas; silences and notification-log state converge between their independent volumes, while degraded reachability and incomplete membership alert separately from total loss. The HA drill creates a silence on one peer, verifies it on the other, stops the primary, and proves a new alert still reaches the authenticated receiver. Prometheus also carries stable `cluster` and unique `replica` external labels and removes `replica` only from alerts, establishing the identity contract required by a future Prometheus pair and remote storage without claiming that remote write is already deployed. Both replicas still share one Docker host, so host-level failure-domain redundancy is intentionally not claimed.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -58,7 +60,7 @@ Browser
                  ├─ Redis job queue → isolated RQ worker
                  ├─ RQ Cron watchdog → durable resume heartbeat audit
                  ├─ Prometheus metrics + 99.5% SLO + bounded TSDB (:9090)
-                 ├─ Alertmanager grouping + authenticated delivery (:9093)
+                 ├─ Alertmanager HA pair + authenticated delivery (:9093/:9095)
                  ├─ provisioned Grafana recovery dashboard (:3001)
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
@@ -93,11 +95,12 @@ docker compose --profile cae up --build
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
 - Prometheus: http://localhost:9090
-- Alertmanager: http://localhost:9093
+- Alertmanager replica 1: http://localhost:9093
+- Alertmanager replica 2: http://localhost:9095
 - Grafana: http://localhost:3001 (`admin` / `thermoform` for local development)
 - Redis and the RQ worker run as internal Compose services.
 - The watchdog service schedules server-side resume reconciliation every 60 seconds; it does not wait for a browser session.
-- Prometheus scrapes itself, durable CAE recovery metrics, and Alertmanager every 15 seconds. It evaluates the 99.5% recovery SLO, burn rates, notification failures, TSDB storage consumption, retention drift, and Alertmanager state-maintenance failures. The default receivers keep active grouped alerts in the local Alertmanager UI without contacting an external system.
+- Prometheus scrapes itself, durable CAE recovery metrics, and both Alertmanager replicas every 15 seconds, and sends alerts directly to both peers. It evaluates the 99.5% recovery SLO, burn rates, notification failures, cluster membership, TSDB storage consumption, retention drift, and Alertmanager state-maintenance failures. The default receivers keep active grouped alerts in the local Alertmanager UI without contacting an external system.
 - Prometheus retains at most 30 days and 8 GB of local TSDB blocks; Alertmanager retains silence and notification-log state for 120 hours. Grafana includes recovery SLO, delivery, retention-budget, and state-maintenance panels. Every alert links to `docs/runbooks/cae-observability.md`.
 - The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
@@ -153,11 +156,11 @@ python scripts/run_observability_state_drill.py
 For an operational backup, first obtain the exact project name from `docker compose ls`, then stop only the state owners and archive them:
 
 ```bash
-docker compose stop prometheus alertmanager
+docker compose stop prometheus alertmanager alertmanager-2
 python scripts/observability_state.py backup \
   --project-name heat-sink \
   --output-dir /secure/backups/thermoform-observability-YYYYMMDD
-docker compose start prometheus alertmanager
+docker compose start prometheus alertmanager alertmanager-2
 ```
 
 Restore requires stopped services, an intact checksum manifest, the explicit `--confirm-empty-volumes` flag, and empty replacement volumes. It never deletes or overwrites an existing volume.
@@ -238,13 +241,14 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - FastAPI derives `/metrics` and `/api/v1/cae/observability` from the shared artifact volume rather than process-local counters. Prometheus alert rules cover API availability, watchdog presence/age, heartbeat leases, orphan repair increments, and failed retries; React shows the same snapshot without parsing Prometheus text.
 - Alertmanager groups by service, component, and severity; critical alerts repeat hourly, warnings repeat every four hours, API loss inhibits dependent recovery symptoms, and a missing watchdog inhibits its stale-age symptom. External delivery credentials belong only in runtime secret files.
 - The recovery SLI is one only when FastAPI is scrapeable and its durable recovery-health contract is healthy. Recording rules expose thirty-day availability and remaining budget for the 99.5% objective; paired 5m/1h and 30m/6h windows alert on fast and persistent budget burn without relying on training or process-local data.
-- `scripts/run_observability_alert_drill.py` starts a project-scoped fixture, Prometheus, Alertmanager, and receiver stack, verifies all production rule groups load, confirms the synthetic missing-watchdog alert routes to `warning-operations-webhook`, and removes only that isolated stack afterward.
+- `scripts/run_observability_alert_drill.py` starts a project-scoped fixture, Prometheus, two clustered Alertmanagers, and an authenticated receiver. It verifies production routing, silence replication, and delivery of a new failover alert after the primary stops, then removes only that isolated stack.
 - The runtime Alertmanager renderer replaces all default, critical, and warning webhook endpoints only after validating HTTPS and the external token file. Alertmanager reads the token directly from `/run/secrets`; the generated YAML never contains its value.
-- Prometheus scrapes Alertmanager's own metrics. Alertmanager loss and increases in `alertmanager_notifications_failed_total{integration="webhook"}` use a local fallback receiver so a broken external path remains diagnosable in the Alertmanager UI.
+- Prometheus scrapes both Alertmanager replicas. One reachable replica triggers a degraded warning, zero triggers the critical outage, incomplete gossip membership is detected independently, and webhook failures use a local fallback receiver.
 - The isolated drill now continues through an authenticated receiver fixture, verifies the standard Alertmanager v4 payload, production severity route, bearer header, group key, and runbook annotation, and exposes no received credential in its verification API.
 - Prometheus self-scraping exposes the configured retention limit and total blocks/WAL/head usage. A recording rule alerts at 80% so operators can preserve the recommended host-disk compaction buffer instead of treating the retention limit as usable disk capacity.
-- `observability_state.py` resolves volumes only through exact Compose project/volume labels, refuses active or nonempty volumes, produces checksummed archives without shell-expanded volume names, and rejects traversal, links, and device members before restore.
-- `run_observability_state_drill.py` creates unique project-scoped volumes, persists a real Alertmanager silence, performs a graceful offline backup, destroys and recreates only the drill volumes, restores both archives, and verifies the same silence plus Prometheus retention before cleanup.
+- `observability_state.py` resolves all three observability volumes only through exact Compose project/volume labels, refuses active or nonempty volumes, produces checksummed archives without shell-expanded volume names, rejects traversal, links, and device members, and retains schema-1 restore compatibility.
+- `run_observability_state_drill.py` creates unique project-scoped volumes, replicates a real Alertmanager silence, performs a graceful offline backup, destroys and recreates only the drill volumes, restores all three archives, and verifies the same silence on both peers plus Prometheus retention before cleanup.
+- Prometheus currently remains one local instance. Its `cluster=thermoform` and `replica=prometheus-1` labels, plus alert-side replica removal, define safe future replica identity; no remote-write endpoint or remote-store durability is claimed in this phase.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

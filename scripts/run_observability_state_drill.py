@@ -22,6 +22,7 @@ COMPOSE_FILE = (
 PROJECT_NAME = f"thermoform-observability-state-drill-{os.getpid()}"
 PROMETHEUS_URL = "http://127.0.0.1:19100"
 ALERTMANAGER_URL = "http://127.0.0.1:19101"
+ALERTMANAGER_2_URL = "http://127.0.0.1:19102"
 
 
 def compose(*args, check=True):
@@ -76,7 +77,22 @@ def ready_probe():
         prometheus_ready = response.status == 200
     with urlopen(f"{ALERTMANAGER_URL}/-/ready", timeout=3) as response:
         alertmanager_ready = response.status == 200
-    return prometheus_ready and alertmanager_ready
+    with urlopen(f"{ALERTMANAGER_2_URL}/-/ready", timeout=3) as response:
+        alertmanager_2_ready = response.status == 200
+    return prometheus_ready and alertmanager_ready and alertmanager_2_ready
+
+
+def cluster_probe():
+    statuses = [
+        get_json(f"{url}/api/v2/status") for url in (ALERTMANAGER_URL, ALERTMANAGER_2_URL)
+    ]
+    if all(
+        status.get("cluster", {}).get("status") == "ready"
+        and len(status.get("cluster", {}).get("peers", [])) == 2
+        for status in statuses
+    ):
+        return statuses
+    return None
 
 
 def create_silence(comment):
@@ -100,8 +116,8 @@ def create_silence(comment):
         return json.load(response)["silenceID"]
 
 
-def restored_silence_probe(silence_id, comment):
-    silences = get_json(f"{ALERTMANAGER_URL}/api/v2/silences")
+def restored_silence_probe(silence_id, comment, url=ALERTMANAGER_URL):
+    silences = get_json(f"{url}/api/v2/silences")
     for silence in silences:
         if silence.get("id") != silence_id:
             continue
@@ -130,7 +146,13 @@ def main():
     try:
         compose("up", "--detach")
         wait_for("Prometheus and Alertmanager readiness", ready_probe, args.timeout)
+        wait_for("two-member Alertmanager cluster", cluster_probe, args.timeout)
         silence_id = create_silence(comment)
+        wait_for(
+            "silence replication before backup",
+            lambda: restored_silence_probe(silence_id, comment, ALERTMANAGER_2_URL),
+            args.timeout,
+        )
         refusal = state_tool(
             "backup",
             "--project-name",
@@ -143,7 +165,14 @@ def main():
         if refusal.returncode == 0 or "mounted by a running container" not in refusal.stderr:
             raise RuntimeError("backup did not refuse a running state owner")
         shutil.rmtree(backup_dir / "running-refusal")
-        compose("stop", "--timeout", "20", "prometheus", "alertmanager")
+        compose(
+            "stop",
+            "--timeout",
+            "20",
+            "prometheus",
+            "alertmanager",
+            "alertmanager-2",
+        )
         state_tool(
             "backup",
             "--project-name",
@@ -175,9 +204,15 @@ def main():
             raise RuntimeError("restore did not refuse populated volumes")
         compose("start")
         wait_for("restored services readiness", ready_probe, args.timeout)
+        wait_for("restored two-member cluster", cluster_probe, args.timeout)
         wait_for(
             "restored Alertmanager silence",
             lambda: restored_silence_probe(silence_id, comment),
+            args.timeout,
+        )
+        wait_for(
+            "restored Alertmanager silence on the second peer",
+            lambda: restored_silence_probe(silence_id, comment, ALERTMANAGER_2_URL),
             args.timeout,
         )
         wait_for("Prometheus retention configuration", retention_probe, args.timeout)

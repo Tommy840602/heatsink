@@ -13,7 +13,8 @@ import tarfile
 
 
 ARCHIVE_IMAGE = "alpine:3.22"
-VOLUME_KEYS = ("prometheus-data", "alertmanager-data")
+LEGACY_VOLUME_KEYS = ("prometheus-data", "alertmanager-data")
+VOLUME_KEYS = (*LEGACY_VOLUME_KEYS, "alertmanager-2-data")
 VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 MANIFEST_NAME = "manifest.json"
 
@@ -173,7 +174,7 @@ def backup(project_name: str, output_dir: Path):
             "sha256": sha256(archive_path),
         }
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_name": project_name,
         "archive_image": ARCHIVE_IMAGE,
@@ -190,18 +191,22 @@ def restore(project_name: str, input_dir: Path, confirm_empty_volumes: bool):
     input_dir = input_dir.resolve()
     manifest_path = input_dir / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != 1:
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {1, 2}:
         raise RuntimeError("unsupported backup manifest schema")
     if manifest.get("project_name") != project_name:
         raise RuntimeError("backup project does not match restore project")
     entries = manifest.get("volumes")
-    if not isinstance(entries, dict) or set(entries) != set(VOLUME_KEYS):
+    expected_keys = LEGACY_VOLUME_KEYS if schema_version == 1 else VOLUME_KEYS
+    if not isinstance(entries, dict) or set(entries) != set(expected_keys):
         raise RuntimeError("backup manifest volume set is invalid")
     volumes = {key: resolve_volume(project_name, key) for key in VOLUME_KEYS}
-    validated = {}
-    for key, volume_name in volumes.items():
+    for volume_name in volumes.values():
         require_volume_idle(volume_name)
         require_volume_empty(volume_name)
+    validated = {}
+    for key in expected_keys:
+        volume_name = volumes[key]
         entry = entries[key]
         if not isinstance(entry, dict):
             raise RuntimeError(f"backup manifest entry for {key} is invalid")

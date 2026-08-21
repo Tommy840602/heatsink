@@ -1,6 +1,9 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  external_labels:
+    cluster: thermoform
+    replica: prometheus-1
 
 rule_files:
   - /etc/prometheus/alerts.yml
@@ -9,10 +12,14 @@ rule_files:
   - /etc/prometheus/storage.yml
 
 alerting:
+  alert_relabel_configs:
+    - action: labeldrop
+      regex: replica
   alertmanagers:
     - static_configs:
-        - targets:
+          - targets:
             - alertmanager:9093
+            - alertmanager-2:9093
 
 scrape_configs:
   - job_name: thermoform-prometheus
@@ -30,3 +37,4 @@ scrape_configs:
     static_configs:
       - targets:
           - alertmanager:9093
+          - alertmanager-2:9093

@@ -20,6 +20,10 @@ def test_prometheus_scrapes_fastapi_and_loads_cae_alerts():
     assert "/etc/prometheus/delivery.yml" in config
     assert "/etc/prometheus/storage.yml" in config
     assert "alertmanager:9093" in config
+    assert "alertmanager-2:9093" in config
+    assert "external_labels:" in config
+    assert "replica: prometheus-1" in config
+    assert "action: labeldrop" in config
     assert "job_name: thermoform-prometheus" in config
     assert "job_name: thermoform-alertmanager" in config
     assert "ThermoformCaeWatchdogMissing" in alerts
@@ -40,7 +44,7 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 13
+    assert len(dashboard["panels"]) == 14
     expressions = {
         target["expr"]
         for panel in dashboard["panels"]
@@ -55,8 +59,10 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     assert any("alertmanager_notifications_failed_total" in item for item in expressions)
     assert "thermoform_observability:prometheus_storage_usage:ratio" in expressions
     assert any("silences_maintenance_errors_total" in item for item in expressions)
+    assert any("alertmanager_cluster_members" in item for item in expressions)
     assert "prometheus:" in compose
     assert "alertmanager:" in compose
+    assert "alertmanager-2:" in compose
     assert "grafana:" in compose
     watchdog = compose.split("  watchdog:", 1)[1].split("\n  prometheus:", 1)[0]
     assert "thermoform-artifacts:/data" in watchdog
@@ -93,6 +99,8 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformCaeRecoverySloSlowBurn",
         "ThermoformCaeRecoverySliMissing",
         "ThermoformAlertmanagerDown",
+        "ThermoformAlertmanagerClusterDegraded",
+        "ThermoformAlertmanagerClusterMembershipMismatch",
         "ThermoformAlertDeliveryFailure",
         "ThermoformPrometheusStorageBudgetHigh",
         "ThermoformPrometheusRetentionNotConfigured",
@@ -128,14 +136,21 @@ def test_alert_delivery_rules_use_native_alertmanager_metrics():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert "ThermoformAlertmanagerDown" in rules
+    assert "ThermoformAlertmanagerClusterDegraded" in rules
+    assert "ThermoformAlertmanagerClusterMembershipMismatch" in rules
     assert "ThermoformAlertDeliveryFailure" in rules
     assert "alertmanager_notifications_failed_total" in rules
     assert 'component: alert-delivery' in rules
     assert "alertmanager outage is visible independently of the api" in tests
+    assert "one reachable replica reports degraded delivery redundancy" in tests
+    assert "reachable replicas detect broken gossip membership" in tests
     assert "webhook counter increase triggers delivery failure" in tests
     assert "THERMOFORM_ALERTMANAGER_CONFIG" in compose
     assert "THERMOFORM_ALERT_SECRET_DIR" in compose
     assert "THERMOFORM_ALERT_SECRET_GID" in compose
+    assert "--cluster.peer=alertmanager-2:9094" in compose
+    assert "--cluster.peer=alertmanager:9094" in compose
+    assert "alertmanager-2-data:/alertmanager" in compose
 
 
 def test_observability_storage_retention_and_alerts_are_configured():
@@ -168,7 +183,9 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
         "infra/observability-state-drill/docker-compose.yml"
     ).read_text(encoding="utf-8")
 
-    assert 'VOLUME_KEYS = ("prometheus-data", "alertmanager-data")' in tool
+    assert 'LEGACY_VOLUME_KEYS = ("prometheus-data", "alertmanager-data")' in tool
+    assert 'VOLUME_KEYS = (*LEGACY_VOLUME_KEYS, "alertmanager-2-data")' in tool
+    assert '"schema_version": 2' in tool
     assert "com.docker.compose.project" in tool
     assert "com.docker.compose.volume" in tool
     assert "--confirm-empty-volumes" in tool
@@ -176,9 +193,11 @@ def test_state_backup_tool_is_offline_scoped_and_restore_is_guarded():
     assert "is not empty; refusing to overwrite state" in tool
     assert "validate_archive" in tool
     assert "StateRestoreDrill" in drill
+    assert "ALERTMANAGER_2_URL" in drill
     assert '"down", "--volumes", "--remove-orphans"' in drill
     assert "prometheus-data:" in compose
     assert "alertmanager-data:" in compose
+    assert "alertmanager-2-data:" in compose
 
 
 def test_observability_drill_is_isolated_and_checks_the_warning_route():
@@ -195,13 +214,17 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert "metrics-fixture:" in compose
     assert "127.0.0.1:19090:9090" in compose
     assert "127.0.0.1:19093:9093" in compose
+    assert "127.0.0.1:19095:9093" in compose
     assert "ThermoformCaeWatchdogMissingDrill" in rule
+    assert "ThermoformAlertmanagerFailoverDrill" in rule
     assert 'drill: "true"' in rule
     assert 'PROJECT_NAME = "thermoform-observability-drill"' in script
     assert "receiver-fixture:" in compose
     assert "127.0.0.1:19094:8080" in compose
     assert 'receiver != "warning-operations-webhook"' in script
     assert "render_alertmanager_runtime.py" in script
+    assert "replicated_silence_probe" in script
+    assert '"alertmanager", environment=environment' in script
     assert '"down",' in script
     assert '"--volumes",' in script
     assert '"--remove-orphans",' in script

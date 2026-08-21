@@ -2,6 +2,7 @@
 """Exercise metrics fixture -> Prometheus -> Alertmanager with isolated Compose."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import time
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +20,11 @@ COMPOSE_FILE = ROOT / "infra" / "observability-drill" / "docker-compose.yml"
 PROJECT_NAME = "thermoform-observability-drill"
 PROMETHEUS_URL = "http://127.0.0.1:19090"
 ALERTMANAGER_URL = "http://127.0.0.1:19093"
+ALERTMANAGER_2_URL = "http://127.0.0.1:19095"
 RECEIVER_URL = "http://127.0.0.1:19094"
+METRICS_FIXTURE_URL = "http://127.0.0.1:19096"
 ALERT_NAME = "ThermoformCaeWatchdogMissingDrill"
+FAILOVER_ALERT_NAME = "ThermoformAlertmanagerFailoverDrill"
 EXPECTED_GROUPS = {
     "thermoform-cae-resume",
     "thermoform-cae-slo-recording",
@@ -70,7 +74,7 @@ def wait_for(description, probe, timeout_seconds):
     raise RuntimeError(f"timed out waiting for {description}{detail}")
 
 
-def prometheus_probe():
+def prometheus_alert_probe(alert_name):
     payload = get_json(f"{PROMETHEUS_URL}/api/v1/rules")
     groups = payload["data"]["groups"]
     names = {group["name"] for group in groups}
@@ -78,36 +82,82 @@ def prometheus_probe():
         return None
     for group in groups:
         for rule in group.get("rules", []):
-            if rule.get("name") == ALERT_NAME and rule.get("state") == "firing":
+            if rule.get("name") == alert_name and rule.get("state") == "firing":
                 return names
     return None
 
 
-def alertmanager_probe():
-    groups = get_json(f"{ALERTMANAGER_URL}/api/v2/alerts/groups")
+def cluster_probe():
+    statuses = [
+        get_json(f"{url}/api/v2/status") for url in (ALERTMANAGER_URL, ALERTMANAGER_2_URL)
+    ]
+    if all(
+        status.get("cluster", {}).get("status") == "ready"
+        and len(status.get("cluster", {}).get("peers", [])) == 2
+        for status in statuses
+    ):
+        return statuses
+    return None
+
+
+def set_phase(phase):
+    request = Request(f"{METRICS_FIXTURE_URL}/phase/{phase}", data=b"", method="POST")
+    with urlopen(request, timeout=3) as response:
+        if response.status != 204:
+            raise RuntimeError(f"metrics fixture rejected phase {phase}")
+
+
+def create_silence(comment):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "matchers": [
+            {"name": "alertname", "value": "NeverFiresInHaDrill", "isRegex": False}
+        ],
+        "startsAt": (now - timedelta(minutes=1)).isoformat(),
+        "endsAt": (now + timedelta(hours=1)).isoformat(),
+        "createdBy": "thermoform-ha-drill",
+        "comment": comment,
+    }
+    request = Request(
+        f"{ALERTMANAGER_URL}/api/v2/silences",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.load(response)["silenceID"]
+
+
+def replicated_silence_probe(silence_id, comment):
+    for silence in get_json(f"{ALERTMANAGER_2_URL}/api/v2/silences"):
+        if silence.get("id") == silence_id and silence.get("comment") == comment:
+            return silence
+    return None
+
+
+def alertmanager_probe(alert_name, url=ALERTMANAGER_URL):
+    groups = get_json(f"{url}/api/v2/alerts/groups")
     for group in groups:
         receiver = group.get("receiver", {}).get("name")
         for alert in group.get("alerts", []):
             labels = alert.get("labels", {})
             annotations = alert.get("annotations", {})
-            if labels.get("alertname") != ALERT_NAME:
+            if labels.get("alertname") != alert_name:
                 continue
             if receiver != "warning-operations-webhook":
                 raise RuntimeError(f"unexpected receiver: {receiver}")
             if labels.get("drill") != "true":
                 raise RuntimeError("drill alert lost its safety label")
-            if "cae-observability.md#thermoformcaewatchdogmissing" not in annotations.get(
-                "runbook_url", ""
-            ):
+            if not annotations.get("runbook_url"):
                 raise RuntimeError("drill alert has no production runbook link")
             return receiver
     return None
 
 
-def receiver_probe():
+def receiver_probe(alert_name):
     deliveries = get_json(f"{RECEIVER_URL}/deliveries")["deliveries"]
     for delivery in deliveries:
-        if ALERT_NAME not in delivery.get("alertnames", []):
+        if alert_name not in delivery.get("alertnames", []):
             continue
         if delivery.get("receiver") != "warning-operations-webhook":
             raise RuntimeError(
@@ -164,25 +214,58 @@ def main():
         compose(
             "up", "--detach", "--remove-orphans", environment=environment
         )
+        cluster = wait_for(
+            "both Alertmanager peers to form a ready cluster",
+            cluster_probe,
+            args.timeout,
+        )
+        silence_comment = f"replicated-{PROJECT_NAME}"
+        silence_id = create_silence(silence_comment)
+        wait_for(
+            "the primary silence to replicate to the second peer",
+            lambda: replicated_silence_probe(silence_id, silence_comment),
+            args.timeout,
+        )
+        set_phase(1)
         rule_groups = wait_for(
             "Prometheus to load production rules and fire the drill alert",
-            prometheus_probe,
+            lambda: prometheus_alert_probe(ALERT_NAME),
             args.timeout,
         )
         receiver = wait_for(
             "Alertmanager to receive and route the drill alert",
-            alertmanager_probe,
+            lambda: alertmanager_probe(ALERT_NAME),
             args.timeout,
         )
         delivery = wait_for(
             "the authenticated external receiver to accept the alert",
-            receiver_probe,
+            lambda: receiver_probe(ALERT_NAME),
+            args.timeout,
+        )
+        compose("stop", "--timeout", "20", "alertmanager", environment=environment)
+        set_phase(2)
+        wait_for(
+            "Prometheus to fire a new alert after primary failure",
+            lambda: prometheus_alert_probe(FAILOVER_ALERT_NAME),
+            args.timeout,
+        )
+        failover_receiver = wait_for(
+            "the surviving Alertmanager to accept the failover alert",
+            lambda: alertmanager_probe(FAILOVER_ALERT_NAME, ALERTMANAGER_2_URL),
+            args.timeout,
+        )
+        failover_delivery = wait_for(
+            "the surviving Alertmanager to deliver the new alert",
+            lambda: receiver_probe(FAILOVER_ALERT_NAME),
             args.timeout,
         )
         print(
             f"PASS: {ALERT_NAME} traversed metrics fixture -> Prometheus -> "
             f"Alertmanager receiver {receiver} -> authenticated webhook fixture; "
-            f"{len(rule_groups)} rule groups loaded, group {delivery['groupKey']}."
+            f"initial group {delivery['groupKey']}; "
+            f"{len(cluster)} peers replicated silence {silence_id}; primary stop "
+            f"failed over {FAILOVER_ALERT_NAME} through {failover_receiver}, group "
+            f"{failover_delivery['groupKey']}; {len(rule_groups)} rule groups loaded."
         )
         return 0
     except (RuntimeError, subprocess.CalledProcessError) as error:

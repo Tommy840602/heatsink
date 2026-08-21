@@ -9,21 +9,65 @@ tests:
     input_series:
       - series: up{job="thermoform-alertmanager", instance="alertmanager:9093"}
         values: 0x5
+      - series: up{job="thermoform-alertmanager", instance="alertmanager-2:9093"}
+        values: 0x5
     alert_rule_test:
       - eval_time: 2m
         alertname: ThermoformAlertmanagerDown
         exp_alerts:
           - exp_labels:
-              instance: alertmanager:9093
-              job: thermoform-alertmanager
               severity: critical
               service: thermoform-cae
               component: alert-delivery
               team: thermal-platform
             exp_annotations:
-              summary: Alertmanager is unreachable
-              description: Prometheus cannot send CAE recovery alerts to Alertmanager or observe notification delivery.
+              summary: The Alertmanager cluster is unreachable
+              description: Prometheus cannot reach either Alertmanager replica, so CAE recovery alerts cannot be delivered.
               runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerdown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: one reachable replica reports degraded delivery redundancy
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-alertmanager", instance="alertmanager:9093"}
+        values: 0x5
+      - series: up{job="thermoform-alertmanager", instance="alertmanager-2:9093"}
+        values: 1x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformAlertmanagerClusterDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: alert-delivery
+              team: thermal-platform
+            exp_annotations:
+              summary: Only one Alertmanager replica is reachable
+              description: Alert delivery remains available, but the two-replica Alertmanager cluster has lost failover capacity.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerclusterdegraded
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: reachable replicas detect broken gossip membership
+    interval: 1m
+    input_series:
+      - series: alertmanager_cluster_members{job="thermoform-alertmanager", instance="alertmanager:9093"}
+        values: 2 1 1 1 1
+      - series: alertmanager_cluster_members{job="thermoform-alertmanager", instance="alertmanager-2:9093"}
+        values: 2 1 1 1 1
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ThermoformAlertmanagerClusterMembershipMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: alert-delivery
+              team: thermal-platform
+            exp_annotations:
+              summary: Alertmanager gossip membership is incomplete
+              description: At least one reachable Alertmanager reports fewer than two cluster members, so silence and notification-log replication may be impaired.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerclustermembershipmismatch
               dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
   - name: webhook counter increase triggers delivery failure

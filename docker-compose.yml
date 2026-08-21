@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       alertmanager:
         condition: service_started
+      alertmanager-2:
+        condition: service_started
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
@@ -88,12 +90,35 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-2:9094
+      - --cluster.peer-name=alertmanager-1
+      - --cluster.label=thermoform
     volumes:
       - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
       - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro
       - alertmanager-data:/alertmanager
     ports:
       - "9093:9093"
+
+  alertmanager-2:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_ALERT_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=${THERMOFORM_ALERTMANAGER_RETENTION:-120h}
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+      - --cluster.peer-name=alertmanager-2
+      - --cluster.label=thermoform
+    volumes:
+      - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro
+      - alertmanager-2-data:/alertmanager
+    ports:
+      - "9095:9093"
 
   grafana:
     image: grafana/grafana:12.4.8
@@ -149,3 +174,4 @@ volumes:
   prometheus-data:
   grafana-data:
   alertmanager-data:
+  alertmanager-2-data:

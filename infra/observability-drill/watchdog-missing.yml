@@ -3,7 +3,7 @@ groups:
     interval: 1s
     rules:
       - alert: ThermoformCaeWatchdogMissingDrill
-        expr: thermoform_cae_watchdog_present == 0
+        expr: thermoform_observability_drill_phase == 1
         labels:
           severity: warning
           service: thermoform-cae
@@ -14,4 +14,18 @@ groups:
           summary: Alert-routing drill detected the missing CAE watchdog fixture
           description: An isolated metrics fixture exercises Prometheus evaluation and the production Alertmanager warning route.
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaewatchdogmissing
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerFailoverDrill
+        expr: thermoform_observability_drill_phase == 2
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: alert-delivery-ha-drill
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Alertmanager HA drill entered the failover phase
+          description: A new alert is emitted only after the primary Alertmanager stops, proving the surviving peer still accepts and delivers notifications.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#alertmanager-ha-failover
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume

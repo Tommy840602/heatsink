@@ -96,7 +96,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Exercise Prometheus to Alertmanager routing
+      - name: Exercise clustered Alertmanager replication and failover
         run: python scripts/run_observability_alert_drill.py
 
   state-drill:

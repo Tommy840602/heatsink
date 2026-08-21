@@ -3,7 +3,7 @@ groups:
     interval: 30s
     rules:
       - alert: ThermoformAlertmanagerDown
-        expr: up{job="thermoform-alertmanager"} == 0
+        expr: sum(up{job="thermoform-alertmanager"}) == 0
         for: 1m
         labels:
           severity: critical
@@ -11,9 +11,37 @@ groups:
           component: alert-delivery
           team: thermal-platform
         annotations:
-          summary: Alertmanager is unreachable
-          description: Prometheus cannot send CAE recovery alerts to Alertmanager or observe notification delivery.
+          summary: The Alertmanager cluster is unreachable
+          description: Prometheus cannot reach either Alertmanager replica, so CAE recovery alerts cannot be delivered.
           runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerdown
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerClusterDegraded
+        expr: sum(up{job="thermoform-alertmanager"}) == 1
+        for: 1m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: alert-delivery
+          team: thermal-platform
+        annotations:
+          summary: Only one Alertmanager replica is reachable
+          description: Alert delivery remains available, but the two-replica Alertmanager cluster has lost failover capacity.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerclusterdegraded
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+      - alert: ThermoformAlertmanagerClusterMembershipMismatch
+        expr: min(alertmanager_cluster_members{job="thermoform-alertmanager"}) < 2
+        for: 2m
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: alert-delivery
+          team: thermal-platform
+        annotations:
+          summary: Alertmanager gossip membership is incomplete
+          description: At least one reachable Alertmanager reports fewer than two cluster members, so silence and notification-log replication may be impaired.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerclustermembershipmismatch
           dashboard_url: http://localhost:3001/d/thermoform-cae-resume
 
       - alert: ThermoformAlertDeliveryFailure

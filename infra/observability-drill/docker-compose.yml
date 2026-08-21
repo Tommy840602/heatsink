@@ -4,6 +4,8 @@ services:
     command: python /app/metrics_server.py
     volumes:
       - ./metrics_server.py:/app/metrics_server.py:ro
+    ports:
+      - "127.0.0.1:19096:8000"
 
   receiver-fixture:
     image: python:3.12-alpine
@@ -34,6 +36,7 @@ services:
     depends_on:
       - metrics-fixture
       - alertmanager
+      - alertmanager-2
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
@@ -42,10 +45,33 @@ services:
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-2:9094
+      - --cluster.peer-name=alertmanager-1
+      - --cluster.label=thermoform-drill
     volumes:
       - ${THERMOFORM_DRILL_ALERTMANAGER_CONFIG:-../alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
       - ${THERMOFORM_DRILL_SECRET_DIR:-../alertmanager/secrets}:/run/secrets:ro
     ports:
       - "127.0.0.1:19093:9093"
+    depends_on:
+      - receiver-fixture
+
+  alertmanager-2:
+    image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_DRILL_SECRET_GID:-65534}
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+      - --cluster.peer-name=alertmanager-2
+      - --cluster.label=thermoform-drill
+    volumes:
+      - ${THERMOFORM_DRILL_ALERTMANAGER_CONFIG:-../alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_DRILL_SECRET_DIR:-../alertmanager/secrets}:/run/secrets:ro
+    ports:
+      - "127.0.0.1:19095:9093"
     depends_on:
       - receiver-fixture

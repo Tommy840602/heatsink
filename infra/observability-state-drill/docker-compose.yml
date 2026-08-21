@@ -13,6 +13,7 @@ services:
       - "127.0.0.1:19100:9090"
     depends_on:
       - alertmanager
+      - alertmanager-2
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
@@ -20,12 +21,33 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --data.retention=24h
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager-2:9094
+      - --cluster.peer-name=alertmanager-1
+      - --cluster.label=thermoform-state-drill
     volumes:
       - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
     ports:
       - "127.0.0.1:19101:9093"
 
+  alertmanager-2:
+    image: prom/alertmanager:v0.33.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=24h
+      - --cluster.listen-address=0.0.0.0:9094
+      - --cluster.peer=alertmanager:9094
+      - --cluster.peer-name=alertmanager-2
+      - --cluster.label=thermoform-state-drill
+    volumes:
+      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-2-data:/alertmanager
+    ports:
+      - "127.0.0.1:19102:9093"
+
 volumes:
   prometheus-data:
   alertmanager-data:
+  alertmanager-2-data:

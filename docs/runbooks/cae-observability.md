@@ -101,12 +101,30 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## ThermoformAlertmanagerDown
 
-**Impact:** Prometheus cannot hand off CAE recovery alerts or observe external notification health. Existing alerts may remain visible in Prometheus, but operators cannot rely on Alertmanager grouping, inhibition, silencing, or delivery.
+**Impact:** Prometheus cannot reach either Alertmanager replica, so CAE recovery alerts cannot be delivered.
 
-1. Check the `alertmanager` container, `/api/v2/status`, storage availability, and the `thermoform-alertmanager` Prometheus target.
-2. Validate the active configuration with `amtool`; if external delivery was just enabled, confirm both runtime mount paths resolve inside the container.
-3. Restore Alertmanager before changing CAE recovery state. Do not mark engineering attempts successful to suppress alerts.
-4. After recovery, verify Prometheus can post an alert and that Alertmanager reports the expected receiver.
+1. Check both `alertmanager` containers, `/api/v2/status`, storage availability, and both `thermoform-alertmanager` Prometheus targets.
+2. Validate the active configuration with `amtool` and inspect gossip port 9094 connectivity; do not bypass grouping or inhibition merely to clear the alert.
+3. Restore at least one replica first, then restore the second and confirm both report two cluster members.
+4. Escalate immediately if the API is down while an active OpenFOAM campaign is running.
+
+## ThermoformAlertmanagerClusterDegraded
+
+**Impact:** notification delivery remains available through one replica, but maintenance or another failure would remove the last delivery path.
+
+1. Identify the failed scrape target and inspect that replica's process, volume, configuration, and port 9094 connectivity.
+2. Do not restart the healthy peer. Verify it continues receiving new alerts while the failed replica is repaired.
+3. Start the repaired peer and wait until both `/api/v2/status` responses report `ready` with two peers.
+4. Run the HA failover drill before resolving the incident.
+
+## ThermoformAlertmanagerClusterMembershipMismatch
+
+**Impact:** both HTTP endpoints may be reachable while gossip replication of silences and notification-log entries is incomplete, increasing the risk of duplicate notifications or missed silences.
+
+1. Compare `alertmanager_cluster_members` and `/api/v2/status` on both replicas.
+2. Confirm both peers use cluster label `thermoform`, unique peer names, and mutually reachable TCP/UDP port 9094 addresses.
+3. Check clock synchronization and cluster logs for peer resolution, reconnect, or settle failures.
+4. Create a non-impacting test silence on one peer and verify the same silence ID appears on the other.
 
 ## ThermoformAlertDeliveryFailure
 
@@ -146,14 +164,25 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 
 ## Offline backup and restore
 
-The backup tool covers the `prometheus-data` and `alertmanager-data` volumes. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes.
+The backup tool covers `prometheus-data`, `alertmanager-data`, and `alertmanager-2-data`. It refuses any volume mounted by a running container, writes SHA-256 checksums, validates archive paths, and restores only into empty project-scoped volumes. Schema-1 backups containing only Prometheus and the first Alertmanager remain restorable; the empty second replica converges from the restored peer after startup.
 
-1. Identify the exact Compose project with `docker compose ls` and stop `prometheus` and `alertmanager` gracefully.
+1. Identify the exact Compose project with `docker compose ls` and stop `prometheus`, `alertmanager`, and `alertmanager-2` gracefully.
 2. Run `python scripts/observability_state.py backup --project-name <project> --output-dir <new-backup-directory>`.
 3. Start the services again immediately after backup and copy the backup directory to durable storage.
 4. For recovery, preserve or quarantine damaged volumes and let Compose create empty replacements with the same project labels. The tool never deletes or overwrites existing state.
 5. With the target services stopped, run `python scripts/observability_state.py restore --project-name <project> --input-dir <backup-directory> --confirm-empty-volumes`, then start the services.
-6. Verify Prometheus readiness and retention, Alertmanager silences, notification deduplication state, dashboards, and both scrape targets.
+6. Verify Prometheus readiness and retention, Alertmanager silences, notification deduplication state, dashboards, and both Alertmanager scrape targets.
+
+## Alertmanager HA failover
+
+1. Confirm both Alertmanager `/api/v2/status` endpoints report `ready` with two peers and Prometheus targets both replicas directly.
+2. Create a test silence on one peer and verify the identical silence ID on the other peer.
+3. Stop only the first Alertmanager and confirm `ThermoformAlertmanagerClusterDegraded` fires while alert delivery remains available.
+4. Emit a new safety-labeled test alert after the stop and verify the surviving peer delivers it. Re-observing an old notification alone does not prove failover.
+5. Restart the first peer, wait for two-member convergence, and verify the silence plus notification log converge before resolving.
+6. Gossip is fail-open: during a network partition, duplicate notifications are preferable to losing a critical notification.
+
+The Compose peers share one host and an unencrypted private Docker network. A cross-host deployment must place replicas in distinct failure domains and protect gossip traffic with the Alertmanager cluster TLS configuration; this local pair alone does not survive host loss.
 
 ## External webhook deployment
 
@@ -165,7 +194,7 @@ The backup tool covers the `prometheus-data` and `alertmanager-data` volumes. It
 
 ## Recovery verification
 
-- Prometheus targets `thermoform-prometheus`, `thermoform-api`, and `thermoform-alertmanager` are up and all fourteen alert rules are loaded.
+- Prometheus targets itself, the API, and both Alertmanager replicas are up and all sixteen alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.
