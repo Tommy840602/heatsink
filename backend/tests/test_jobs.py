@@ -49,5 +49,5 @@ def test_job_api_returns_202_and_exposes_completed_result():
 
 def test_cae_benchmark_isolated_queue_routing():
     assert queue_name_for_task("cae_benchmark") == CAE_QUEUE_NAME
-    assert queue_name_for_task("cae") == DEFAULT_QUEUE_NAME
+    assert queue_name_for_task("cae") == CAE_QUEUE_NAME
     assert queue_name_for_task("phase1") == DEFAULT_QUEUE_NAME

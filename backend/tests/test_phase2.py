@@ -91,3 +91,38 @@ def test_cad_rejects_an_explicit_base_that_cannot_fit_the_fins(tmp_path):
         assert "do not fit" in str(exc)
     else:
         raise AssertionError("invalid CAD packing should fail")
+
+
+def test_fallback_stl_is_a_closed_union_without_internal_box_faces(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.cad.shutil.which", lambda _command: None)
+    repository = ArtifactRepository(tmp_path)
+    result = generate_cad(
+        CadGenerationRequest(
+            design=DesignParameters(
+                fin_count=20,
+                fin_thickness=0.5,
+                fin_height=30,
+                fin_spacing=1.5,
+                air_velocity=2.0,
+            )
+        ),
+        repository,
+    )
+    stl = repository.cad_artifact_path(
+        result["cad_id"], f'{result["cad_id"]}.stl'
+    ).read_text(encoding="utf-8")
+    vertices = [
+        tuple(float(value) for value in line.split()[1:])
+        for line in stl.splitlines()
+        if line.strip().startswith("vertex ")
+    ]
+    edges = Counter()
+    for start in range(0, len(vertices), 3):
+        a, b, c = vertices[start : start + 3]
+        for first, second in ((a, b), (b, c), (c, a)):
+            edges[tuple(sorted((first, second)))] += 1
+
+    assert result["stl_generator"] == "fallback_parametric_union_mesh"
+    assert vertices
+    assert set(edges.values()) == {2}
+from collections import Counter

@@ -14,11 +14,20 @@ from app.repositories.artifacts import ArtifactRepository
 from app.services.cad import generate_cad
 
 
-OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v1"
+OPENFOAM_TEMPLATE_VERSION = "openfoam-cht-v2"
 
 
 def _required_commands(solver: str) -> list[str]:
-    return ["surfaceTransformPoints", "blockMesh", "snappyHexMesh", "checkMesh", "splitMeshRegions", solver]
+    return [
+        "surfaceTransformPoints",
+        "surfaceCheck",
+        "blockMesh",
+        "surfaceFeatureExtract",
+        "snappyHexMesh",
+        "checkMesh",
+        "splitMeshRegions",
+        solver,
+    ]
 
 
 def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[str, str]:
@@ -27,7 +36,22 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
         0.12,
         (design.fin_count * design.fin_thickness + (design.fin_count - 1) * design.fin_spacing + 4) / 1000,
     )
+    length_m = 0.09
+    base_thickness_m = 0.004
     height_m = (design.fin_height + 4) / 1000
+    domain = {
+        "x_min": -0.03,
+        "x_max": length_m + 0.06,
+        "y_min": -0.01,
+        "y_max": width_m + 0.01,
+        "z_min": -0.005,
+        "z_max": height_m + 0.03,
+    }
+    cells = {
+        "x": max(36, round((domain["x_max"] - domain["x_min"]) / 0.003)),
+        "y": max(30, round((domain["y_max"] - domain["y_min"]) / 0.002)),
+        "z": max(24, round((domain["z_max"] - domain["z_min"]) / 0.002)),
+    }
     manifest = {
         "case_id": case_id,
         "template_version": OPENFOAM_TEMPLATE_VERSION,
@@ -39,6 +63,7 @@ def _case_files(request: OpenFoamCaseRequest, stl: str, case_id: str) -> dict[st
             "inlet_velocity_m_s": design.air_velocity,
         },
         "geometry_units": "STL source is millimetres; Allrun scales it to metres",
+        "geometry_contract": "closed fused base-and-fin union, fully enclosed by the fluid domain",
         "case_validated": False,
         "results_available": False,
         "not_cfd_result": True,
@@ -57,18 +82,22 @@ select turbulence/wall treatment for the target OpenFOAM distribution, confirm
 material properties, and perform mesh-independence and convergence studies.
 
 Run `./Allrun` inside an initialized OpenFOAM environment. The script deliberately
-uses `set -eu` so a preprocessing or solver failure cannot be reported as success.
+stops after two-region mesh checks. Thermal fields, material dictionaries, solver
+execution, and response extraction are the next validation stage and are not
+silently synthesized by this preprocessing package.
 """
     allrun = f"""#!/bin/sh
 set -eu
 cd "$(dirname "$0")"
 surfaceTransformPoints -scale '(0.001 0.001 0.001)' constant/triSurface/heatsink-mm.stl constant/triSurface/heatsink.stl
+surfaceCheck constant/triSurface/heatsink.stl | tee log.surfaceCheck
 blockMesh
 surfaceFeatureExtract
 snappyHexMesh -overwrite
 checkMesh -allGeometry -allTopology
 splitMeshRegions -cellZones -overwrite
-{request.solver} | tee log.{request.solver}
+checkMesh -allRegions -allGeometry -allTopology
+echo 'Preprocessing complete; solver execution remains validation-gated.'
 """
     control_dict = f"""FoamFile
 {{ version 2.0; format ascii; class dictionary; object controlDict; }}
@@ -83,12 +112,12 @@ runTimeModifiable true;
 convertToMeters 1;
 vertices
 (
-  (-0.045 {-width_m / 2:.6f} 0) (0.225 {-width_m / 2:.6f} 0)
-  (0.225 {width_m / 2:.6f} 0) (-0.045 {width_m / 2:.6f} 0)
-  (-0.045 {-width_m / 2:.6f} {height_m + 0.06:.6f}) (0.225 {-width_m / 2:.6f} {height_m + 0.06:.6f})
-  (0.225 {width_m / 2:.6f} {height_m + 0.06:.6f}) (-0.045 {width_m / 2:.6f} {height_m + 0.06:.6f})
+  ({domain["x_min"]:.6f} {domain["y_min"]:.6f} {domain["z_min"]:.6f}) ({domain["x_max"]:.6f} {domain["y_min"]:.6f} {domain["z_min"]:.6f})
+  ({domain["x_max"]:.6f} {domain["y_max"]:.6f} {domain["z_min"]:.6f}) ({domain["x_min"]:.6f} {domain["y_max"]:.6f} {domain["z_min"]:.6f})
+  ({domain["x_min"]:.6f} {domain["y_min"]:.6f} {domain["z_max"]:.6f}) ({domain["x_max"]:.6f} {domain["y_min"]:.6f} {domain["z_max"]:.6f})
+  ({domain["x_max"]:.6f} {domain["y_max"]:.6f} {domain["z_max"]:.6f}) ({domain["x_min"]:.6f} {domain["y_max"]:.6f} {domain["z_max"]:.6f})
 );
-blocks (hex (0 1 2 3 4 5 6 7) (72 44 36) simpleGrading (1 1 1));
+blocks (hex (0 1 2 3 4 5 6 7) ({cells["x"]} {cells["y"]} {cells["z"]}) simpleGrading (1 1 1));
 edges ();
 boundary
 (
@@ -102,20 +131,27 @@ mergePatchPairs ();
 { version 2.0; format ascii; class dictionary; object surfaceFeatureExtractDict; }
 heatsink.stl { extractionMethod extractFromSurface; extractFromSurfaceCoeffs { includedAngle 150; } writeObj yes; }
 """
-    snappy = """FoamFile
-{ version 2.0; format ascii; class dictionary; object snappyHexMeshDict; }
+    snappy = f"""FoamFile
+{{ version 2.0; format ascii; class dictionary; object snappyHexMeshDict; }}
 castellatedMesh true; snap true; addLayers false;
-geometry { heatsink.stl { type triSurfaceMesh; name heatsink; } }
+geometry {{ heatsink.stl {{ type triSurfaceMesh; name heatsink; }} }}
 castellatedMeshControls
-{
+{{
   maxLocalCells 2000000; maxGlobalCells 4000000; minRefinementCells 0; nCellsBetweenLevels 3;
-  features ({ file "heatsink.eMesh"; level 2; });
-  refinementSurfaces { heatsink { level (2 3); faceZone heatsink; cellZone heatsinkSolid; cellZoneInside inside; } }
-  resolveFeatureAngle 30; locationInMesh (-0.02 0 0.05); allowFreeStandingZoneFaces true;
-}
-snapControls { nSmoothPatch 3; tolerance 2.0; nSolveIter 30; nRelaxIter 5; }
-addLayersControls { relativeSizes true; layers {}; expansionRatio 1.0; finalLayerThickness 0.3; minThickness 0.1; nGrow 0; featureAngle 60; nRelaxIter 3; nSmoothSurfaceNormals 1; nSmoothNormals 3; nSmoothThickness 10; maxFaceThicknessRatio 0.5; maxThicknessToMedialRatio 0.3; minMedianAxisAngle 90; nBufferCellsNoExtrude 0; nLayerIter 50; }
-meshQualityControls { #include "meshQualityDict" }
+  features ({{ file "heatsink.eMesh"; level 2; }});
+  refinementSurfaces {{ heatsink {{ level (2 2); }} }}
+  refinementRegions {{}}
+  resolveFeatureAngle 30;
+  locationsInMesh
+  (
+    (({domain["x_min"] / 2:.6f} {width_m / 2:.6f} {height_m / 2:.6f}) fluid)
+    (({length_m / 2:.6f} {width_m / 2:.6f} {base_thickness_m / 2:.6f}) solid)
+  );
+  allowFreeStandingZoneFaces false;
+}}
+snapControls {{ nSmoothPatch 3; tolerance 2.0; nSolveIter 30; nRelaxIter 5; }}
+addLayersControls {{ relativeSizes true; layers {{}}; expansionRatio 1.0; finalLayerThickness 0.3; minThickness 0.1; nGrow 0; featureAngle 60; nRelaxIter 3; nSmoothSurfaceNormals 1; nSmoothNormals 3; nSmoothThickness 10; maxFaceThicknessRatio 0.5; maxThicknessToMedialRatio 0.3; minMedianAxisAngle 90; nBufferCellsNoExtrude 0; nLayerIter 50; }}
+meshQualityControls {{ #include "meshQualityDict" }}
 mergeTolerance 1e-6;
 """
     return {
@@ -123,10 +159,13 @@ mergeTolerance 1e-6;
         "case.json": json.dumps(manifest, indent=2, sort_keys=True),
         "Allrun": allrun,
         "system/controlDict": control_dict,
+        "system/fvSchemes": "FoamFile { version 2.0; format ascii; class dictionary; object fvSchemes; }\nddtSchemes {}\ngradSchemes {}\ndivSchemes {}\nlaplacianSchemes {}\ninterpolationSchemes {}\nsnGradSchemes {}\n",
+        "system/fvSolution": "FoamFile { version 2.0; format ascii; class dictionary; object fvSolution; }\nPIMPLE { nOuterCorrectors 1; }\n",
         "system/blockMeshDict": block_mesh,
         "system/surfaceFeatureExtractDict": surface_features,
         "system/snappyHexMeshDict": snappy,
         "system/meshQualityDict": "maxNonOrtho 65; maxBoundarySkewness 20; maxInternalSkewness 4; maxConcave 80; minVol 1e-13; minTetQuality 1e-15; minArea -1; minTwist 0.02; minDeterminant 0.001; minFaceWeight 0.05; minVolRatio 0.01; minTriangleTwist -1; nSmoothScale 4; errorReduction 0.75;\n",
+        "constant/regionProperties": "FoamFile { version 2.0; format ascii; class dictionary; object regionProperties; }\nregions ( fluid (fluid) solid (solid) );\n",
         "constant/triSurface/heatsink-mm.stl": stl,
     }
 

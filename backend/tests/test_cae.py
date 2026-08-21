@@ -38,11 +38,23 @@ def test_openfoam_case_is_packaged_without_claiming_cfd_results(tmp_path):
             "Allrun",
             "system/blockMeshDict",
             "system/snappyHexMeshDict",
+            "constant/regionProperties",
             "constant/triSurface/heatsink-mm.stl",
         } <= names
         manifest = json.loads(archive.read("case.json"))
         assert manifest["not_cfd_result"] is True
         assert manifest["boundary_conditions"]["inlet_velocity_m_s"] == 2.8
+        assert "closed fused" in manifest["geometry_contract"]
+        allrun = archive.read("Allrun").decode()
+        assert "surfaceCheck constant/triSurface/heatsink.stl" in allrun
+        assert "checkMesh -allRegions" in allrun
+        assert "chtMultiRegionFoam |" not in allrun
+        block_mesh = archive.read("system/blockMeshDict").decode()
+        assert "(-0.030000 -0.010000 -0.005000)" in block_mesh
+        assert "0.130000" in block_mesh
+        snappy = archive.read("system/snappyHexMeshDict").decode()
+        assert ") fluid)" in snappy
+        assert ") solid)" in snappy
 
 
 def test_openfoam_request_reports_missing_solver_instead_of_fabricating_output(tmp_path, monkeypatch):

@@ -8,6 +8,8 @@ Phase 3 moves long workflows to Redis/RQ workers and adds a traceable OpenFOAM C
 
 Phase 3.1 adds an official `multiRegionHeater` environment benchmark plus machine-readable mesh quality, convergence, energy-balance, and response-metric acceptance gates. Passing the tutorial proves the OpenFOAM runtime path only; it does not create a heat-sink CFD result.
 
+Phase 3.2 replaces the overlapping fallback boxes with a watertight fused heat-sink surface, encloses it inside the flow domain, and defines explicit `fluid`/`solid` snappyHexMesh regions. Design CAE packaging and benchmark runs are both isolated on the OpenFOAM worker queue; thermal fields and design-result acceptance remain separate gates.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -118,9 +120,9 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 ## Async jobs and OpenFOAM handoff
 
 - The React workflow uses `POST /jobs` and polls `GET /jobs/{id}`. DOE batches, surrogate training, optimization, and CAE preparation no longer occupy the browser's request lifecycle.
-- Phase 1, Phase 2, and case packaging use `thermoform`; `cae_benchmark` is isolated on `thermoform-cae`, so a general worker cannot accidentally claim a solver task.
+- Phase 1 and Phase 2 use `thermoform`; both `cae` case work and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
-- The OpenFOAM ZIP includes the exact parametric STL, case manifest, `blockMesh`, `snappyHexMesh`, region-splitting setup, and a fail-fast `Allrun` script targeting `chtMultiRegionFoam`.
+- The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, and a fail-fast preprocessing `Allrun`; it stops before `chtMultiRegionFoam` until fields and material gates are implemented.
 - Generated cases are marked `case_validated=false`, `results_available=false`, and `not_cfd_result=true`. Installing OpenFOAM alone does not turn a starter case into a validated CAE result.
 - Heat-sink solver execution is blocked while union geometry, interfaces, fields, material properties, mesh quality, convergence, or energy balance remain unvalidated.
 - The benchmark worker targets the official OpenCFD OpenFOAM v2312 `multiRegionHeater` tutorial. Start the worker from a sourced OpenFOAM shell and expose either `FOAM_TUTORIALS` or `THERMOFORM_OPENFOAM_BENCHMARK_CASE`.

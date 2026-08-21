@@ -69,36 +69,56 @@ def _normal(a, b, c) -> tuple[float, float, float]:
     return nx / length, ny / length, nz / length
 
 
-def _box_triangles(x0, y0, z0, dx, dy, dz):
-    vertices = [
-        (x0, y0, z0), (x0 + dx, y0, z0), (x0 + dx, y0 + dy, z0), (x0, y0 + dy, z0),
-        (x0, y0, z0 + dz), (x0 + dx, y0, z0 + dz),
-        (x0 + dx, y0 + dy, z0 + dz), (x0, y0 + dy, z0 + dz),
-    ]
-    faces = [
-        (0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7),
-        (0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5),
-        (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7),
-    ]
-    return [(vertices[a], vertices[b], vertices[c]) for a, b, c in faces]
+def _quad_triangles(a, b, c, d):
+    return [(a, b, c), (a, c, d)]
 
 
 def _fallback_stl(cad_id: str, geometry: dict[str, float | int]) -> str:
-    triangles = _box_triangles(
-        0, 0, 0, geometry["base_length"], geometry["base_width"], geometry["base_thickness"]
-    )
-    for index in range(int(geometry["fin_count"])):
-        y = geometry["first_fin_y"] + index * (geometry["fin_thickness"] + geometry["fin_spacing"])
-        triangles.extend(
-            _box_triangles(
-                0,
-                y,
-                geometry["base_thickness"],
-                geometry["base_length"],
-                geometry["fin_thickness"],
-                geometry["fin_height"],
+    """Create the exterior of the fused base-and-fin solid without internal faces.
+
+    The heat sink is an extrusion of a comb-shaped YZ cross-section.  Emitting
+    faces only where an occupied cross-section cell touches an empty cell makes
+    the fallback mesh a closed union, unlike a collection of overlapping boxes.
+    """
+    length = float(geometry["base_length"])
+    width = float(geometry["base_width"])
+    base = float(geometry["base_thickness"])
+    fin_height = float(geometry["fin_height"])
+    fin_thickness = float(geometry["fin_thickness"])
+    first_fin_y = float(geometry["first_fin_y"])
+    pitch = fin_thickness + float(geometry["fin_spacing"])
+    fin_intervals = [
+        (first_fin_y + index * pitch, first_fin_y + index * pitch + fin_thickness)
+        for index in range(int(geometry["fin_count"]))
+    ]
+    y_breaks = sorted({0.0, width, *(value for interval in fin_intervals for value in interval)})
+    z_breaks = [0.0, base, base + fin_height]
+
+    occupied: set[tuple[int, int]] = set()
+    for y_index, (y0, y1) in enumerate(zip(y_breaks, y_breaks[1:])):
+        midpoint = (y0 + y1) / 2
+        for z_index, (z0, z1) in enumerate(zip(z_breaks, z_breaks[1:])):
+            in_base = z1 <= base + 1e-9
+            in_fin = z0 >= base - 1e-9 and any(
+                lower - 1e-9 <= midpoint <= upper + 1e-9 for lower, upper in fin_intervals
             )
-        )
+            if in_base or in_fin:
+                occupied.add((y_index, z_index))
+
+    triangles = []
+    for y_index, z_index in sorted(occupied):
+        y0, y1 = y_breaks[y_index], y_breaks[y_index + 1]
+        z0, z1 = z_breaks[z_index], z_breaks[z_index + 1]
+        triangles.extend(_quad_triangles((0, y0, z0), (0, y0, z1), (0, y1, z1), (0, y1, z0)))
+        triangles.extend(_quad_triangles((length, y0, z0), (length, y1, z0), (length, y1, z1), (length, y0, z1)))
+        if (y_index - 1, z_index) not in occupied:
+            triangles.extend(_quad_triangles((0, y0, z0), (length, y0, z0), (length, y0, z1), (0, y0, z1)))
+        if (y_index + 1, z_index) not in occupied:
+            triangles.extend(_quad_triangles((0, y1, z0), (0, y1, z1), (length, y1, z1), (length, y1, z0)))
+        if (y_index, z_index - 1) not in occupied:
+            triangles.extend(_quad_triangles((0, y0, z0), (0, y1, z0), (length, y1, z0), (length, y0, z0)))
+        if (y_index, z_index + 1) not in occupied:
+            triangles.extend(_quad_triangles((0, y0, z1), (length, y0, z1), (length, y1, z1), (0, y1, z1)))
     lines = [f"solid {cad_id}"]
     for a, b, c in triangles:
         nx, ny, nz = _normal(a, b, c)
@@ -165,7 +185,7 @@ def generate_cad(
         "freecad_error": freecad_error,
         "step_generated": step_path.exists(),
         "stl_generated": True,
-        "stl_generator": "fallback_parametric_mesh" if fallback_used else "FreeCAD",
+        "stl_generator": "fallback_parametric_union_mesh" if fallback_used else "FreeCAD",
         "not_cfd_or_cae": True,
         "downloads": {
             "freecad_script": f"/api/v1/cad/{cad_id}/artifacts/{script_name}",
