@@ -8,6 +8,7 @@ on:
       - infra/**
       - docs/runbooks/cae-observability.md
       - scripts/run_observability_alert_drill.py
+      - scripts/render_alertmanager_runtime.py
   push:
     branches:
       - main
@@ -17,6 +18,7 @@ on:
       - infra/**
       - docs/runbooks/cae-observability.md
       - scripts/run_observability_alert_drill.py
+      - scripts/render_alertmanager_runtime.py
 
 permissions:
   contents: read
@@ -42,6 +44,10 @@ jobs:
             -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
             prom/prometheus:v3.5.5 \
             test rules /etc/prometheus/tests/slo.test.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.5 \
+            test rules /etc/prometheus/tests/delivery.test.yml
 
       - name: Validate Alertmanager routes
         run: |
@@ -53,6 +59,23 @@ jobs:
             -v "$PWD/infra/alertmanager:/etc/alertmanager:ro" \
             prom/alertmanager:v0.33.0 \
             check-config /etc/alertmanager/alertmanager.webhook.example.yml
+
+      - name: Render and validate production webhook configuration
+        run: |
+          runtime_dir="$(mktemp -d)"
+          mkdir "$runtime_dir/secrets"
+          chmod 750 "$runtime_dir" "$runtime_dir/secrets"
+          python -c 'import os, pathlib, sys; p=pathlib.Path(sys.argv[1]); p.write_text("ci-fixture-not-a-secret\n"); os.chmod(p, 0o640)' "$runtime_dir/secrets/thermoform_alert_webhook_token"
+          python scripts/render_alertmanager_runtime.py \
+            --webhook-url https://incident.example.net/v1/thermoform \
+            --secret-dir "$runtime_dir/secrets" \
+            --output "$runtime_dir/alertmanager.yml"
+          docker run --rm --entrypoint amtool \
+            --group-add "$(id -g)" \
+            -v "$runtime_dir/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            -v "$runtime_dir/secrets:/run/secrets:ro" \
+            prom/alertmanager:v0.33.0 \
+            check-config /etc/alertmanager/alertmanager.yml
 
       - name: Validate Grafana dashboard JSON
         run: python -m json.tool infra/grafana/dashboards/cae-resume-observability.json >/dev/null

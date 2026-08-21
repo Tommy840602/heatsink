@@ -67,6 +67,7 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ./infra/prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ./infra/prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -78,11 +79,14 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_ALERT_SECRET_GID:-65534}
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
-      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_ALERTMANAGER_CONFIG:-./infra/alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_ALERT_SECRET_DIR:-./infra/alertmanager/secrets}:/run/secrets:ro
       - alertmanager-data:/alertmanager
     ports:
       - "9093:9093"

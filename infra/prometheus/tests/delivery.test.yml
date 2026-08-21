@@ -1,0 +1,47 @@
+rule_files:
+  - ../delivery.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: alertmanager outage is visible independently of the api
+    interval: 1m
+    input_series:
+      - series: up{job="thermoform-alertmanager", instance="alertmanager:9093"}
+        values: 0x5
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ThermoformAlertmanagerDown
+        exp_alerts:
+          - exp_labels:
+              instance: alertmanager:9093
+              job: thermoform-alertmanager
+              severity: critical
+              service: thermoform-cae
+              component: alert-delivery
+              team: thermal-platform
+            exp_annotations:
+              summary: Alertmanager is unreachable
+              description: Prometheus cannot send CAE recovery alerts to Alertmanager or observe notification delivery.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertmanagerdown
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume
+
+  - name: webhook counter increase triggers delivery failure
+    interval: 1m
+    input_series:
+      - series: alertmanager_notifications_failed_total{integration="webhook", reason="serverError"}
+        values: 0 0 0 1 1 1 1 1 1 1 1 1 1
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ThermoformAlertDeliveryFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: thermoform-cae
+              component: alert-delivery
+              team: thermal-platform
+            exp_annotations:
+              summary: Alertmanager webhook delivery is failing
+              description: At least one external webhook notification failed in the last ten minutes; Alertmanager will retry according to its notification policy.
+              runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformalertdeliveryfailure
+              dashboard_url: http://localhost:3001/d/thermoform-cae-resume

@@ -99,13 +99,40 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 3. Validate that `infra/prometheus/slo.yml` is loaded and the `thermoform-cae-slo-recording` group is healthy.
 4. Restore scrape or rule evaluation before interpreting the dashboard's availability and error-budget panels.
 
+## ThermoformAlertmanagerDown
+
+**Impact:** Prometheus cannot hand off CAE recovery alerts or observe external notification health. Existing alerts may remain visible in Prometheus, but operators cannot rely on Alertmanager grouping, inhibition, silencing, or delivery.
+
+1. Check the `alertmanager` container, `/api/v2/status`, storage availability, and the `thermoform-alertmanager` Prometheus target.
+2. Validate the active configuration with `amtool`; if external delivery was just enabled, confirm both runtime mount paths resolve inside the container.
+3. Restore Alertmanager before changing CAE recovery state. Do not mark engineering attempts successful to suppress alerts.
+4. After recovery, verify Prometheus can post an alert and that Alertmanager reports the expected receiver.
+
+## ThermoformAlertDeliveryFailure
+
+**Impact:** Alertmanager accepted an alert but at least one authenticated webhook request failed. It will retry, so the receiver must tolerate duplicate deliveries with the same Alertmanager `groupKey` and alert fingerprints.
+
+1. Inspect `alertmanager_notifications_failed_total` by `integration` and `reason`, plus Alertmanager logs for HTTP status or timeout details.
+2. Confirm the destination certificate, DNS, network policy, rate limit, payload limit, and incident-system availability.
+3. For HTTP 401/403, compare secret versions and mounts without printing the bearer token. Rotate through the secret manager if its exposure is suspected.
+4. Keep the `local-delivery-fallback` route available for delivery-component alerts while the external webhook is impaired.
+5. Resolve only after the failure counter stops increasing and an authenticated staging drill reaches the receiver.
+
+## External webhook deployment
+
+1. Store the bearer token outside Git as `thermoform_alert_webhook_token`, set its directory to `0750` and file to `0640`, and export its group ID through `THERMOFORM_ALERT_SECRET_GID` so the non-root container can read it.
+2. Render the runtime configuration with `scripts/render_alertmanager_runtime.py`; production URLs must use HTTPS and cannot contain credentials or fragments.
+3. Set `THERMOFORM_ALERTMANAGER_CONFIG` to the rendered file and `THERMOFORM_ALERT_SECRET_DIR` to its separately managed secret directory before starting Compose.
+4. Validate the rendered configuration with `amtool`, then run `scripts/run_observability_alert_drill.py` against the isolated fixture before enabling a real receiver.
+5. The receiver must deduplicate Alertmanager retries using `groupKey` and individual alert fingerprints.
+
 ## Recovery verification
 
-- Prometheus target `thermoform-api` is up and all nine alert rules are loaded.
+- Prometheus targets `thermoform-api` and `thermoform-alertmanager` are up and all eleven alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.
 - Grafana shows at least two fresh watchdog intervals after recovery.
 - The 30-day recovery availability is at or above 99.5%, or the remaining error budget and follow-up mitigation are recorded in the incident.
 
-For production delivery, replace the mounted Alertmanager configuration with the webhook example, change the endpoint, and provide the bearer token as a runtime secret. Never commit receiver credentials.
+For production delivery, use the runtime renderer and secret-directory mounts above. Never edit a bearer token into Alertmanager YAML or commit receiver credentials.

@@ -38,6 +38,9 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+.runtime/
+infra/alertmanager/secrets/*
+!infra/alertmanager/secrets/README.md
 
 # vercel
 .vercel

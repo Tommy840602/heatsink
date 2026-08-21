@@ -5,6 +5,7 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
   - /etc/prometheus/slo.yml
+  - /etc/prometheus/delivery.yml
 
 alerting:
   alertmanagers:
@@ -18,3 +19,8 @@ scrape_configs:
     static_configs:
       - targets:
           - backend:8000
+
+  - job_name: thermoform-alertmanager
+    static_configs:
+      - targets:
+          - alertmanager:9093

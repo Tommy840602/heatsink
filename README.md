@@ -42,6 +42,8 @@ Phase 3.17 makes those alerts operational. Alertmanager groups and deduplicates 
 
 Phase 3.18 defines a 99.5% thirty-day availability SLO for the complete CAE recovery path. Prometheus records composite API-plus-durable-health availability, remaining error budget, and multi-window burn rates; fast, slow, and missing-SLI alerts link to the runbook. Grafana exposes the budget directly, while an isolated Compose drill proves that a controlled missing-watchdog fixture reaches the production Alertmanager warning route.
 
+Phase 3.19 makes external notification delivery deployable. A strict runtime renderer accepts only credential-free HTTPS endpoints, verifies a separately mounted bearer-token file, and never copies the token into Alertmanager YAML. The token uses group-scoped read access for Alertmanager's non-root container instead of making it world-readable or running the container as root. Prometheus now monitors Alertmanager itself and native webhook failure counters, Grafana exposes delivery health, and the isolated drill proves the full authenticated metrics fixture → Prometheus → Alertmanager → webhook receiver path.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -54,7 +56,7 @@ Browser
                  ├─ Redis job queue → isolated RQ worker
                  ├─ RQ Cron watchdog → durable resume heartbeat audit
                  ├─ Prometheus metrics + 99.5% recovery SLO (:9090)
-                 ├─ Alertmanager grouping + inhibition + routing (:9093)
+                 ├─ Alertmanager grouping + authenticated delivery (:9093)
                  ├─ provisioned Grafana recovery dashboard (:3001)
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
@@ -93,8 +95,8 @@ docker compose --profile cae up --build
 - Grafana: http://localhost:3001 (`admin` / `thermoform` for local development)
 - Redis and the RQ worker run as internal Compose services.
 - The watchdog service schedules server-side resume reconciliation every 60 seconds; it does not wait for a browser session.
-- Prometheus scrapes durable CAE recovery metrics every 15 seconds, evaluates the 99.5% recovery-availability SLO and multi-window burn rates, and sends firing/resolved state to Alertmanager. The default receivers route active grouped alerts in the local Alertmanager UI without contacting an external system. For production delivery, mount an adapted `infra/alertmanager/alertmanager.webhook.example.yml` and inject its bearer token as a runtime secret.
-- Grafana opens with the `CAE Resume Observability` dashboard provisioned, including thirty-day availability, remaining error budget, and burn rate. Every alert links to `docs/runbooks/cae-observability.md`, and `.github/workflows/observability-config.yml` validates all monitoring configuration changed by a pull request.
+- Prometheus scrapes durable CAE recovery metrics and Alertmanager every 15 seconds, evaluates the 99.5% recovery-availability SLO, multi-window burn rates, Alertmanager availability, and native webhook failure counters. The default receivers keep active grouped alerts in the local Alertmanager UI without contacting an external system.
+- Grafana opens with the `CAE Resume Observability` dashboard provisioned, including thirty-day availability, remaining error budget, burn rate, Alertmanager availability, and webhook failures. Every alert links to `docs/runbooks/cae-observability.md`, and `.github/workflows/observability-config.yml` validates all monitoring configuration changed by a pull request.
 - The optional `cae-worker` runs the official OpenCFD v2312 amd64 packages and listens only on `thermoform-cae`.
 
 ## Local development
@@ -116,11 +118,29 @@ npm ci
 npm run dev
 ```
 
-Run the isolated alert-routing drill (uses local ports `19090` and `19093`, then removes only its own Compose project and volumes):
+Run the isolated alert-routing drill (uses local ports `19090`, `19093`, and `19094`, then removes only its own Compose project and volumes):
 
 ```bash
 python scripts/run_observability_alert_drill.py
 ```
+
+Prepare authenticated production webhook delivery without storing credentials in Git:
+
+```bash
+mkdir -p .runtime/alertmanager-secrets
+chmod 750 .runtime/alertmanager-secrets
+install -m 640 /path/from/your/secret-manager/token .runtime/alertmanager-secrets/thermoform_alert_webhook_token
+python scripts/render_alertmanager_runtime.py \
+  --webhook-url https://incident.example.net/v1/thermoform \
+  --secret-dir .runtime/alertmanager-secrets \
+  --output .runtime/alertmanager.yml
+THERMOFORM_ALERTMANAGER_CONFIG=.runtime/alertmanager.yml \
+THERMOFORM_ALERT_SECRET_DIR=.runtime/alertmanager-secrets \
+THERMOFORM_ALERT_SECRET_GID="$(id -g)" \
+docker compose up --build
+```
+
+Production webhook URLs must use HTTPS. The renderer rejects credentials embedded in URLs, fragments, empty tokens, group-writable tokens, and token files readable by other users. The supplemental GID lets Alertmanager's `nobody` user read the group-scoped token without running the container as root.
 
 Copy each `.env.example` to `.env` when overriding local defaults.
 
@@ -198,7 +218,10 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - FastAPI derives `/metrics` and `/api/v1/cae/observability` from the shared artifact volume rather than process-local counters. Prometheus alert rules cover API availability, watchdog presence/age, heartbeat leases, orphan repair increments, and failed retries; React shows the same snapshot without parsing Prometheus text.
 - Alertmanager groups by service, component, and severity; critical alerts repeat hourly, warnings repeat every four hours, API loss inhibits dependent recovery symptoms, and a missing watchdog inhibits its stale-age symptom. External delivery credentials belong only in runtime secret files.
 - The recovery SLI is one only when FastAPI is scrapeable and its durable recovery-health contract is healthy. Recording rules expose thirty-day availability and remaining budget for the 99.5% objective; paired 5m/1h and 30m/6h windows alert on fast and persistent budget burn without relying on training or process-local data.
-- `scripts/run_observability_alert_drill.py` starts a project-scoped fixture, Prometheus, and Alertmanager stack, verifies all production rule groups load, confirms the synthetic missing-watchdog alert fires and routes to `warning-operations`, and removes only that isolated stack afterward.
+- `scripts/run_observability_alert_drill.py` starts a project-scoped fixture, Prometheus, Alertmanager, and receiver stack, verifies all production rule groups load, confirms the synthetic missing-watchdog alert routes to `warning-operations-webhook`, and removes only that isolated stack afterward.
+- The runtime Alertmanager renderer replaces all default, critical, and warning webhook endpoints only after validating HTTPS and the external token file. Alertmanager reads the token directly from `/run/secrets`; the generated YAML never contains its value.
+- Prometheus scrapes Alertmanager's own metrics. Alertmanager loss and increases in `alertmanager_notifications_failed_total{integration="webhook"}` use a local fallback receiver so a broken external path remains diagnosable in the Alertmanager UI.
+- The isolated drill now continues through an authenticated receiver fixture, verifies the standard Alertmanager v4 payload, production severity route, bearer header, group key, and runbook annotation, and exposes no received credential in its verification API.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

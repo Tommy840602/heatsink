@@ -11,20 +11,46 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    - receiver: operations-webhook
+    - receiver: local-delivery-fallback
+      matchers:
+        - component="alert-delivery"
+    - receiver: critical-operations-webhook
       matchers:
         - severity="critical"
       repeat_interval: 1h
-    - receiver: operations-webhook
+    - receiver: warning-operations-webhook
       matchers:
         - severity="warning"
       repeat_interval: 4h
 
 receivers:
+  - name: local-delivery-fallback
   - name: operations-webhook
     webhook_configs:
-      - url: https://alerts.example.com/v1/thermoform
+      - url: "https://alerts.example.com/v1/thermoform"
         send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+  - name: critical-operations-webhook
+    webhook_configs:
+      - url: "https://alerts.example.com/v1/thermoform"
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/thermoform_alert_webhook_token
+  - name: warning-operations-webhook
+    webhook_configs:
+      - url: "https://alerts.example.com/v1/thermoform"
+        send_resolved: true
+        max_alerts: 50
+        timeout: 10s
         http_config:
           authorization:
             type: Bearer

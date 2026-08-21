@@ -17,7 +17,9 @@ def test_prometheus_scrapes_fastapi_and_loads_cae_alerts():
     assert "metrics_path: /metrics" in config
     assert "/etc/prometheus/alerts.yml" in config
     assert "/etc/prometheus/slo.yml" in config
+    assert "/etc/prometheus/delivery.yml" in config
     assert "alertmanager:9093" in config
+    assert "job_name: thermoform-alertmanager" in config
     assert "ThermoformCaeWatchdogMissing" in alerts
     assert "ThermoformCaeWatchdogStale" in alerts
     assert "ThermoformCaeResumeHeartbeatStale" in alerts
@@ -36,7 +38,7 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 9
+    assert len(dashboard["panels"]) == 11
     expressions = {
         target["expr"]
         for panel in dashboard["panels"]
@@ -47,6 +49,8 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
         "thermoform_cae:slo_recovery_error_budget:remaining_ratio_30d"
         in expressions
     )
+    assert 'up{job="thermoform-alertmanager"}' in expressions
+    assert any("alertmanager_notifications_failed_total" in item for item in expressions)
     assert "prometheus:" in compose
     assert "alertmanager:" in compose
     assert "grafana:" in compose
@@ -72,6 +76,8 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
     assert 'alertname="ThermoformCaeWatchdogMissing"' in config
     assert "credentials_file:" in example
     assert "credentials:" not in example
+    assert example.count("credentials_file:") == 3
+    assert "local-delivery-fallback" in example
     for alert in (
         "ThermoformCaeApiDown",
         "ThermoformCaeWatchdogMissing",
@@ -82,6 +88,8 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformCaeRecoverySloFastBurn",
         "ThermoformCaeRecoverySloSlowBurn",
         "ThermoformCaeRecoverySliMissing",
+        "ThermoformAlertmanagerDown",
+        "ThermoformAlertDeliveryFailure",
     ):
         assert f"## {alert}" in runbook
 
@@ -103,6 +111,26 @@ def test_recovery_slo_has_recording_rules_burn_alerts_and_promtool_tests():
     assert "sustained recovery failure triggers multi-window burn alerts" in tests
 
 
+def test_alert_delivery_rules_use_native_alertmanager_metrics():
+    rules = ROOT.joinpath("infra/prometheus/delivery.yml").read_text(
+        encoding="utf-8"
+    )
+    tests = ROOT.joinpath(
+        "infra/prometheus/tests/delivery.test.yml"
+    ).read_text(encoding="utf-8")
+    compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "ThermoformAlertmanagerDown" in rules
+    assert "ThermoformAlertDeliveryFailure" in rules
+    assert "alertmanager_notifications_failed_total" in rules
+    assert 'component: alert-delivery' in rules
+    assert "alertmanager outage is visible independently of the api" in tests
+    assert "webhook counter increase triggers delivery failure" in tests
+    assert "THERMOFORM_ALERTMANAGER_CONFIG" in compose
+    assert "THERMOFORM_ALERT_SECRET_DIR" in compose
+    assert "THERMOFORM_ALERT_SECRET_GID" in compose
+
+
 def test_observability_drill_is_isolated_and_checks_the_warning_route():
     compose = ROOT.joinpath(
         "infra/observability-drill/docker-compose.yml"
@@ -120,8 +148,13 @@ def test_observability_drill_is_isolated_and_checks_the_warning_route():
     assert "ThermoformCaeWatchdogMissingDrill" in rule
     assert 'drill: "true"' in rule
     assert 'PROJECT_NAME = "thermoform-observability-drill"' in script
-    assert 'receiver != "warning-operations"' in script
-    assert '"down", "--volumes", "--remove-orphans"' in script
+    assert "receiver-fixture:" in compose
+    assert "127.0.0.1:19094:8080" in compose
+    assert 'receiver != "warning-operations-webhook"' in script
+    assert "render_alertmanager_runtime.py" in script
+    assert '"down",' in script
+    assert '"--volumes",' in script
+    assert '"--remove-orphans",' in script
 
 
 def test_ci_validates_every_observability_configuration():
@@ -133,7 +166,9 @@ def test_ci_validates_every_observability_configuration():
     assert "promtool" in workflow
     assert "check config /etc/prometheus/prometheus.yml" in workflow
     assert "test rules /etc/prometheus/tests/slo.test.yml" in workflow
+    assert "test rules /etc/prometheus/tests/delivery.test.yml" in workflow
     assert "amtool" in workflow
     assert "check-config /etc/alertmanager/alertmanager.yml" in workflow
     assert "python -m json.tool" in workflow
     assert "python scripts/run_observability_alert_drill.py" in workflow
+    assert "python scripts/render_alertmanager_runtime.py" in workflow

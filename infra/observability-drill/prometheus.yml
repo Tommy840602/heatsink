@@ -5,6 +5,7 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
   - /etc/prometheus/slo.yml
+  - /etc/prometheus/delivery.yml
   - /etc/prometheus/watchdog-missing.yml
 
 alerting:
@@ -19,3 +20,8 @@ scrape_configs:
     static_configs:
       - targets:
           - metrics-fixture:8000
+
+  - job_name: thermoform-alertmanager
+    static_configs:
+      - targets:
+          - alertmanager:9093

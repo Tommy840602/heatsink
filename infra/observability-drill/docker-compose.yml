@@ -5,6 +5,16 @@ services:
     volumes:
       - ./metrics_server.py:/app/metrics_server.py:ro
 
+  receiver-fixture:
+    image: python:3.12-alpine
+    command: python /app/receiver_server.py
+    environment:
+      EXPECTED_AUTHORIZATION: Bearer drill-token-not-a-secret
+    volumes:
+      - ./receiver_server.py:/app/receiver_server.py:ro
+    ports:
+      - "127.0.0.1:19094:8080"
+
   prometheus:
     image: prom/prometheus:v3.5.5
     command:
@@ -14,6 +24,7 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ../prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ../prometheus/delivery.yml:/etc/prometheus/delivery.yml:ro
       - ./watchdog-missing.yml:/etc/prometheus/watchdog-missing.yml:ro
     ports:
       - "127.0.0.1:19090:9090"
@@ -23,10 +34,15 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.33.0
+    group_add:
+      - ${THERMOFORM_DRILL_SECRET_GID:-65534}
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
-      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_DRILL_ALERTMANAGER_CONFIG:-../alertmanager/alertmanager.yml}:/etc/alertmanager/alertmanager.yml:ro
+      - ${THERMOFORM_DRILL_SECRET_DIR:-../alertmanager/secrets}:/run/secrets:ro
     ports:
       - "127.0.0.1:19093:9093"
+    depends_on:
+      - receiver-fixture
