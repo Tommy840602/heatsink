@@ -209,6 +209,10 @@ def test_prometheus_pair_remote_writes_to_durable_thanos_query_path():
     assert "thanos-object-store-data:/thanos/object-store" in compose
     assert "thanos-store:" in compose
     assert "quay.io/thanos/thanos:v0.42.4" in compose
+    assert compose.count(
+        "${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}"
+        ":/etc/thanos/object-store.yml:ro"
+    ) == 4
     assert "--query.replica-label=replica" in compose
     assert "--query.replica-label=receive_replica" in compose
     assert compose.count("--receive.replication-factor=3") == 3
@@ -330,3 +334,6 @@ def test_ci_validates_every_observability_configuration():
     assert "python scripts/run_observability_alert_drill.py" in workflow
     assert "python scripts/render_alertmanager_runtime.py" in workflow
     assert "python scripts/run_observability_state_drill.py" in workflow
+    assert "python scripts/render_thanos_s3_config.py" in workflow
+    assert "THERMOFORM_THANOS_OBJECT_STORE_CONFIG" in workflow
+    assert "access_key:|secret_key:|session_token:" in workflow

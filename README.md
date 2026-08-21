@@ -52,6 +52,8 @@ Phase 3.22 adds a second Prometheus rule evaluator and a durable shared remote-w
 
 Phase 3.23 replaces the single Receive process with a three-ingester Ketama ring and RF=3 quorum writes. Each Prometheus fans out to two ingress URLs, Thanos Query deduplicates both Prometheus and Receive replica labels, and Store Gateway reads long-term blocks from a shared object-store interface. New alerts distinguish degraded replication from lost write quorum, Store Gateway loss, and bucket-operation failure. The HA drill proves new samples and alerts survive one ingester, one Prometheus, and one Alertmanager failure in sequence; backup schema 4 protects eight source-of-truth volumes and verifies an object-store-only historical series after all ingesters stop. The local stack uses Thanos's filesystem bucket adapter for deterministic CI, so it remains a same-host reference rather than production S3 or cross-failure-domain HA.
 
+Phase 3.24 adds a guarded production S3 cutover contract without weakening the deterministic local stack. A strict renderer emits only TLS/signature-v4, workload-identity (`aws_sdk_auth`) configuration with SSE-S3 or optional SSE-KMS; it has no static credential inputs and rejects unsafe bucket, endpoint, prefix, and KMS values. One Compose override path feeds the same runtime file to all three Receive ingesters and Store Gateway, while CI proves the rendered file contains no access-key, secret-key, or session-token fields. Bucket provisioning, IAM/KMS, migration, lifecycle policy, Compactor, and cross-failure-domain scheduling remain explicit deployment responsibilities.
+
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
 ## Architecture
@@ -157,6 +159,22 @@ docker compose up --build
 
 Production webhook URLs must use HTTPS. The renderer rejects credentials embedded in URLs, fragments, empty tokens, group-writable tokens, and token files readable by other users. The supplemental GID lets Alertmanager's `nobody` user read the group-scoped token without running the container as root.
 
+Prepare a production S3 object-store file without embedding cloud credentials:
+
+```bash
+mkdir -p .runtime/thanos
+python scripts/render_thanos_s3_config.py \
+  --bucket thermoform-metrics-prod \
+  --endpoint s3.ap-northeast-1.amazonaws.com \
+  --region ap-northeast-1 \
+  --prefix thermoform/metrics \
+  --output .runtime/thanos/object-store.yml
+THERMOFORM_THANOS_OBJECT_STORE_CONFIG=.runtime/thanos/object-store.yml \
+  docker compose config --quiet
+```
+
+The target platform must inject an IAM task/instance role or projected web identity through the AWS SDK credential chain. Never put access keys in this file or `.env`. Validate the bucket through the same workload identity and follow the production cutover checklist in `docs/runbooks/cae-observability.md` before restarting all Receive and Store Gateway processes with the new path.
+
 Exercise a real offline backup and restore against isolated named volumes and an Alertmanager silence:
 
 ```bash
@@ -259,6 +277,7 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 - `observability_state.py` resolves eight source-of-truth observability volumes through exact Compose labels, refuses active or nonempty volumes, produces checksummed archives, rejects hostile tar members, and retains schema 1–3 restore compatibility. Store Gateway cache is deliberately rebuildable and excluded.
 - `run_observability_state_drill.py` uploads a deterministic historical block, proves Store Gateway still serves it after all Receive ingesters stop, restores eight archives after volume reconstruction, and verifies the block plus replicated Alertmanager silence and real-time data.
 - Prometheus replicas use stable `cluster`/`replica` labels; Receive ingesters add `receive_replica`. Query removes both dimensions for normal views. The filesystem bucket and all processes share one host, so production object-store and host-level HA are not claimed.
+- `render_thanos_s3_config.py` emits a credential-free S3 configuration for SDK workload identity, TLS, signature v4, content MD5, and SSE-S3/SSE-KMS. `THERMOFORM_THANOS_OBJECT_STORE_CONFIG` mounts that one file into every object-store client; it does not provision or migrate the bucket.
 - Phase 1 and Phase 2 use `thermoform`; `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, and `cae_benchmark` are isolated on `thermoform-cae`, so a general worker cannot accidentally claim an OpenFOAM task.
 - API and worker containers share `/data`, so immutable datasets, model bundles, CAD files, and CAE packages remain available after a job completes.
 - The OpenFOAM ZIP includes the watertight fused parametric STL, case manifest, enclosing `blockMesh`, explicit `fluid`/`solid` snappyHexMesh seeds, region-splitting setup, fields/materials, response function objects, and a fail-fast preprocessing `Allrun`. Its bundled `Allsolve` remains a one-step smoke command; production execution is owned by `cae_solve`.

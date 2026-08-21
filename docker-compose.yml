@@ -150,7 +150,7 @@ services:
       - --objstore.config-file=/etc/thanos/object-store.yml
     volumes:
       - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
-      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - ${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}:/etc/thanos/object-store.yml:ro
       - thanos-receive-data:/thanos/receive
       - thanos-object-store-data:/thanos/object-store
     ports:
@@ -179,7 +179,7 @@ services:
       - --objstore.config-file=/etc/thanos/object-store.yml
     volumes:
       - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
-      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - ${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}:/etc/thanos/object-store.yml:ro
       - thanos-receive-2-data:/thanos/receive
       - thanos-object-store-data:/thanos/object-store
     ports:
@@ -208,7 +208,7 @@ services:
       - --objstore.config-file=/etc/thanos/object-store.yml
     volumes:
       - ./infra/thanos/hashring.json:/etc/thanos/hashring.json:ro
-      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - ${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}:/etc/thanos/object-store.yml:ro
       - thanos-receive-3-data:/thanos/receive
       - thanos-object-store-data:/thanos/object-store
     ports:
@@ -227,7 +227,7 @@ services:
       - --objstore.config-file=/etc/thanos/object-store.yml
       - --sync-block-duration=5m
     volumes:
-      - ./infra/thanos/object-store.yml:/etc/thanos/object-store.yml:ro
+      - ${THERMOFORM_THANOS_OBJECT_STORE_CONFIG:-./infra/thanos/object-store.yml}:/etc/thanos/object-store.yml:ro
       - thanos-object-store-data:/thanos/object-store:ro
       - thanos-store-data:/thanos/store
     ports:

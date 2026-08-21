@@ -253,6 +253,21 @@ Normal operation intentionally sends each sample to two Receive ingress URLs; th
 
 All Prometheus, Receive, Store Gateway, and filesystem bucket volumes still share one Docker host. The filesystem object-store adapter is deterministic for this local reference and CI, but Thanos documents it as a test/demo option; production must use strongly consistent managed object storage and separate failure domains.
 
+## Production S3 cutover
+
+The checked-in `infra/thanos/object-store.yml` remains a local/CI filesystem adapter. A production cutover is complete only when every Receive ingester and Store Gateway uses the same remote bucket and prefix.
+
+1. Provision a strongly consistent bucket with versioning, encryption, capacity alerts, and an explicitly reviewed lifecycle policy. Do not enable expiration that is shorter than the required metrics retention.
+2. Assign workload identities rather than static keys. Receive needs the reviewed write/list/read permissions for block shipping; Store Gateway should use a separate read/list-only identity when the deployment platform separates the processes. Add KMS permissions only when SSE-KMS is selected.
+3. Render `.runtime/thanos/object-store.yml` with `scripts/render_thanos_s3_config.py`. Confirm `aws_sdk_auth: true`, `insecure: false`, `signature_version2: false`, and the expected SSE mode; reject any file containing `access_key`, `secret_key`, or `session_token`.
+4. Set `THERMOFORM_THANOS_OBJECT_STORE_CONFIG` and run `docker compose config --quiet`. Confirm all three Receive services and Store Gateway mount the same resolved file at `/etc/thanos/object-store.yml`.
+5. From the same workload identity and network path, use `thanos tools bucket ls --objstore.config-file=<runtime-file>` to prove list access. Use a disposable prefix or controlled block to prove write/read before changing the live clients.
+6. Plan migration of existing filesystem blocks separately. Switching configuration does not copy historical blocks; retain the old volume until a known old timestamp is queryable through Store Gateway from S3.
+7. Apply the new configuration to all four clients in one maintenance change. Mixed bucket/prefix configurations split block history and are not an acceptable steady state.
+8. Verify Receive upload metrics, Store Gateway synchronization, a historical-only query, `ThermoformThanosObjectStoreFailure`, and rollback access to the preserved filesystem data.
+
+The schema-4 offline tool protects the local filesystem bucket only. It is not a backup of S3. Provider versioning, replication, restore testing, and lifecycle controls own remote-bucket durability. This phase does not deploy Thanos Compactor; block compaction, downsampling, and deletion retention must be designed before claiming a complete production long-term-storage lifecycle.
+
 ## Alertmanager HA failover
 
 1. Confirm both Alertmanager `/api/v2/status` endpoints report `ready` with two peers and Prometheus targets both replicas directly.
