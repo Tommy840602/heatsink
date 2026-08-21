@@ -21,6 +21,9 @@ on:
       - scripts/validate_production_plan_inputs.py
       - scripts/summarize_terraform_plan.py
       - scripts/validate_aws_bootstrap.py
+      - scripts/audit_aws_bootstrap.py
+      - scripts/validate_aws_bootstrap_audit.py
+      - backend/tests/test_aws_bootstrap*.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
   push:
@@ -45,6 +48,9 @@ on:
       - scripts/validate_production_plan_inputs.py
       - scripts/summarize_terraform_plan.py
       - scripts/validate_aws_bootstrap.py
+      - scripts/audit_aws_bootstrap.py
+      - scripts/validate_aws_bootstrap_audit.py
+      - backend/tests/test_aws_bootstrap*.py
       - scripts/observability_state.py
       - scripts/run_observability_state_drill.py
 
@@ -124,16 +130,24 @@ jobs:
             "$terraform_dir/environments/production" \
             .github/workflows/terraform-production-plan.yml
           python -m pip install --disable-pip-version-check --quiet \
-            cfn-lint==1.55.1
+            cfn-lint==1.55.1 pytest==8.4.2
           cfn-lint --non-zero-exit-code warning \
             infra/aws-bootstrap/production-terraform-plan.yml
           python scripts/validate_aws_bootstrap.py \
             infra/aws-bootstrap/production-terraform-plan.yml
+          python scripts/validate_aws_bootstrap_audit.py \
+            scripts/audit_aws_bootstrap.py
           python -m compileall -q \
             scripts/run_eks_thanos_staging_drill.py \
             scripts/validate_production_plan_inputs.py \
             scripts/summarize_terraform_plan.py \
-            scripts/validate_aws_bootstrap.py
+            scripts/validate_aws_bootstrap.py \
+            scripts/audit_aws_bootstrap.py \
+            scripts/validate_aws_bootstrap_audit.py
+          python -m pytest -q \
+            backend/tests/test_aws_bootstrap.py \
+            backend/tests/test_aws_bootstrap_audit.py \
+            backend/tests/test_aws_bootstrap_audit_contract.py
 
       - name: Render credential-free production S3 configuration
         run: |

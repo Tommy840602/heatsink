@@ -96,3 +96,69 @@ README. Then independently verify bucket versioning, KMS encryption, public
 access blocks, the TLS deny policy, OIDC audience/subject equality, and the
 role's effective policy before dispatching a plan. Creating the foundation does
 not authorize a Terraform plan or apply.
+
+## Read-only preflight and deployed audit
+
+Run the audit from the exact reviewed commit with a clean worktree. The caller
+must be a separately authenticated audit identity in the expected account. It
+needs only these API families:
+
+- `sts:GetCallerIdentity`;
+- CloudFormation `DescribeChangeSet`, `GetTemplate`, `DescribeStacks`, and
+  `DescribeStackResources`;
+- the S3 `GetBucket*`, `GetPublicAccessBlock`, and `GetEncryptionConfiguration`
+  reads used by the script;
+- KMS `DescribeKey`, `GetKeyRotationStatus`, `ListAliases`, and
+  `ListResourceTags`;
+- IAM `GetRole`, `GetRolePolicy`, `GetOpenIDConnectProvider`, role policy list
+  reads, and `SimulatePrincipalPolicy`.
+
+The script contains no create, update, delete, execute-change-set, or
+detect-drift API. Its static validator enforces that command allowlist.
+
+Before execution, inspect the unexecuted `CREATE` change set:
+
+```bash
+python scripts/audit_aws_bootstrap.py change-set \
+  --account-id 123456789012 \
+  --region ap-northeast-1 \
+  --stack-name thermoform-production-terraform-bootstrap \
+  --change-set-name bootstrap-reviewed \
+  --state-bucket thermoform-production-state-123456789012 \
+  --thanos-bucket thermoform-production-thanos-123456789012 \
+  --github-subject 'repo:Tommy840602@84989346/heatsink@1341254721:environment:production-plan' \
+  --create-oidc-provider false
+```
+
+This fails unless the caller account, every parameter, original template hash,
+capability, logical resource/type, and action match the reviewed contract. Only
+`Add` is accepted; Modify, Remove, Import, conditional replacement, extra
+resources, and truncated responses are rejected. Its value-free output is
+review evidence, not permission to execute the change set.
+
+After a separately authorized execution, enable CloudFormation termination
+protection and run:
+
+```bash
+python scripts/audit_aws_bootstrap.py deployed \
+  --account-id 123456789012 \
+  --region ap-northeast-1 \
+  --stack-name thermoform-production-terraform-bootstrap \
+  --state-bucket thermoform-production-state-123456789012 \
+  --thanos-bucket thermoform-production-thanos-123456789012 \
+  --github-subject 'repo:Tommy840602@84989346/heatsink@1341254721:environment:production-plan' \
+  --create-oidc-provider false
+```
+
+The deployed audit reads back the exact stack inventory and parameters, S3
+region/versioning/public-access/KMS/ownership/TLS/lifecycle controls, KMS state
+and alias, GitHub OIDC audience/thumbprints, role trust, attached/inline policy
+inventory, and every inline statement. IAM simulation must allow only required
+state/lock and refresh reads while denying state deletion and representative
+S3, IAM, KMS, and CloudFormation mutations.
+
+IAM simulation evaluates identity policies and does not execute the tested API.
+It does not replace live resource-policy inspection, so the script validates the
+state bucket policy directly. The result is a targeted contract audit, not a
+claim that every AWS organization policy or unsupported resource property is
+globally drift-free.
