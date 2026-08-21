@@ -24,11 +24,11 @@ test("server-renders the Thermoform application", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });
 
-test("React frontend uses the typed FastAPI client", async () => {
+test("React frontend uses the JavaScript FastAPI client", async () => {
   const [page, api, layout] = await Promise.all([
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../lib/api.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/api.js", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.jsx", import.meta.url), "utf8"),
   ]);
   assert.match(page, /api\s*\.\s*health\(\)/);
   assert.match(page, /api\s*\.\s*runPhase1/);

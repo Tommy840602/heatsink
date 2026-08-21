@@ -22,6 +22,7 @@ backend/data/
 .next/
 .vinext/
 /out/
+frontend/next-env.d.ts
 
 # misc
 .DS_Store

@@ -9,7 +9,7 @@ Thermoform is a separated React + FastAPI engineering application for heat-sink 
 ```text
 Browser
   └─ React frontend (:3000)
-       └─ typed HTTP client
+       └─ JavaScript HTTP client
             └─ FastAPI backend (:8000)
                  ├─ design validation + standard CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
@@ -20,7 +20,7 @@ Browser
 ```
 
 ```text
-frontend/   React 19, TypeScript, Vinext/Vite, responsive engineering UI
+frontend/   React 19, JavaScript/JSX, Vinext/Vite, responsive engineering UI
 backend/    FastAPI, Pydantic, pyDOE3, SciPy, scikit-learn, XGBoost, pymoo
 ```
 

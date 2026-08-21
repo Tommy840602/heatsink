@@ -2,7 +2,7 @@ import { desc } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { notes } from "../../../db/schema";
 
-function toRouteErrorMessage(error: unknown) {
+function toRouteErrorMessage(error) {
   const message = error instanceof Error ? error.message : "Unexpected error";
   const detail =
     error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
@@ -33,12 +33,9 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request) {
   try {
-    const payload = (await request.json()) as {
-      title?: string;
-      content?: string;
-    };
+    const payload = await request.json();
     const title = payload.title?.trim() ?? "";
     const content = payload.content?.trim() ?? "";
 

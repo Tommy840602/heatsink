@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  api,
-  type Phase1Result,
-  type SimulationResult,
-  type SurrogatePrediction,
-} from "../lib/api";
+import { api } from "../lib/api";
 
 const nav = [
   ["overview", "⌂", "Overview"],
@@ -35,7 +30,7 @@ const demoMetrics = [
   { model: "GPR", r2: 0.984, rmse: 1.21, mae: 0.92, cv_rmse: 1.34, training_ms: 312, inference_ms: 2 },
 ];
 
-const labelFor = (name: string) =>
+const labelFor = (name) =>
   ({
     fin_count: "Fin count",
     fin_thickness: "Fin thickness",
@@ -44,17 +39,7 @@ const labelFor = (name: string) =>
     air_velocity: "Air velocity",
   })[name] ?? name;
 
-function PageHead({
-  kicker,
-  title,
-  description,
-  badge,
-}: {
-  kicker: string;
-  title: string;
-  description: string;
-  badge?: string;
-}) {
+function PageHead({ kicker, title, description, badge }) {
   return (
     <>
       <div className="eyebrow">
@@ -75,13 +60,7 @@ function PageHead({
   );
 }
 
-function Overview({
-  go,
-  phase1,
-}: {
-  go: (page: string) => void;
-  phase1: Phase1Result | null;
-}) {
+function Overview({ go, phase1 }) {
   const modelMetrics = phase1?.model_metrics.t_max ?? demoMetrics;
   const selectedModel = phase1?.selected_models.t_max ?? "GPR";
   const recommended = phase1?.optimization.recommended;
@@ -258,7 +237,7 @@ function Overview({
   );
 }
 
-function HeatSink({ count = 10 }: { count?: number }) {
+function HeatSink({ count = 10 }) {
   return (
     <div className="sink" aria-label="Parametric heat sink preview">
       {Array.from({ length: Math.min(count, 14) }).map((_, i) => (
@@ -274,12 +253,6 @@ function ModuleView({
   phase1,
   runWorkflow,
   workflowRunning,
-}: {
-  active: string;
-  notify: (s: string) => void;
-  phase1: Phase1Result | null;
-  runWorkflow: (method: string, runs: number) => Promise<void>;
-  workflowRunning: boolean;
 }) {
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
@@ -288,9 +261,7 @@ function ModuleView({
   const [spacing, setSpacing] = useState(2.4);
   const [velocity, setVelocity] = useState(3.2);
   const [model, setModel] = useState("GPR");
-  const [apiPrediction, setApiPrediction] = useState<
-    SimulationResult | SurrogatePrediction | null
-  >(null);
+  const [apiPrediction, setApiPrediction] = useState(null);
   const design = useMemo(
     () => ({
       fin_count: fins,
@@ -342,7 +313,7 @@ function ModuleView({
   const medianTemp = sortedTemps.length
     ? sortedTemps[Math.floor(sortedTemps.length / 2)]
     : 74.8;
-  const average = (key: "thermal_resistance" | "pressure_drop") =>
+  const average = (key) =>
     experiments.length
       ? experiments.reduce((sum, row) => sum + row[key], 0) / experiments.length
       : key === "thermal_resistance"
@@ -406,7 +377,7 @@ function ModuleView({
                   step={Number(step)}
                   value={Number(value)}
                   onChange={(e) =>
-                    (setter as (v: number) => void)(Number(e.target.value))
+                    setter(Number(e.target.value))
                   }
                 />
                 <output>
@@ -695,7 +666,7 @@ function ModuleView({
                     row.source.split(" × ").map(labelFor).join(" × "),
                     (row.f_value / maximumEffect) * 94,
                     `F ${row.f_value.toFixed(2)}`,
-                  ] as [string, number, string])
+                  ])
                 : [
                     ["Air velocity", 94, "F 18.42"],
                     ["Fin height", 67, "F 11.07"],
@@ -1001,7 +972,7 @@ function ModuleView({
         </div>
         <div className="candidate-strip">
           {(pareto.length
-            ? [pareto[0], recommended ?? pareto[Math.floor(pareto.length / 2)], pareto.at(-1)!].map((candidate, index) => [
+            ? [pareto[0], recommended ?? pareto[Math.floor(pareto.length / 2)], pareto.at(-1)].map((candidate, index) => [
                 String(index + 1).padStart(2, "0"),
                 `${candidate.responses.t_max.toFixed(1)}°C`,
                 `${candidate.responses.mass.toFixed(0)} g`,
@@ -1071,7 +1042,7 @@ function ModuleView({
                   step={Number(step)}
                   value={Number(value)}
                   onChange={(e) =>
-                    (setter as (v: number) => void)(Number(e.target.value))
+                    setter(Number(e.target.value))
                   }
                 />
                 <output>
@@ -1252,18 +1223,16 @@ function ModuleView({
 export default function Home() {
   const [active, setActive] = useState("overview");
   const [toast, setToast] = useState("");
-  const [phase1, setPhase1] = useState<Phase1Result | null>(null);
+  const [phase1, setPhase1] = useState(null);
   const [workflowRunning, setWorkflowRunning] = useState(false);
-  const [apiStatus, setApiStatus] = useState<"checking" | "online" | "demo">(
-    "checking",
-  );
+  const [apiStatus, setApiStatus] = useState("checking");
   useEffect(() => {
     api
       .health()
       .then(() => setApiStatus("online"))
       .catch(() => setApiStatus("demo"));
   }, []);
-  const notify = (message: string) => {
+  const notify = (message) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   };
