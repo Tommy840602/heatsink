@@ -1,0 +1,17 @@
+groups:
+  - name: thermoform-cae-observability-drill
+    interval: 1s
+    rules:
+      - alert: ThermoformCaeWatchdogMissingDrill
+        expr: thermoform_cae_watchdog_present == 0
+        labels:
+          severity: warning
+          service: thermoform-cae
+          component: resume-recovery
+          team: thermal-platform
+          drill: "true"
+        annotations:
+          summary: Alert-routing drill detected the missing CAE watchdog fixture
+          description: An isolated metrics fixture exercises Prometheus evaluation and the production Alertmanager warning route.
+          runbook_url: https://github.com/Tommy840602/heatsink/blob/main/docs/runbooks/cae-observability.md#thermoformcaewatchdogmissing
+          dashboard_url: http://localhost:3001/d/thermoform-cae-resume

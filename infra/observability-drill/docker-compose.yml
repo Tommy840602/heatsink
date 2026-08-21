@@ -1,0 +1,32 @@
+services:
+  metrics-fixture:
+    image: python:3.12-alpine
+    command: python /app/metrics_server.py
+    volumes:
+      - ./metrics_server.py:/app/metrics_server.py:ro
+
+  prometheus:
+    image: prom/prometheus:v3.5.5
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../prometheus/slo.yml:/etc/prometheus/slo.yml:ro
+      - ./watchdog-missing.yml:/etc/prometheus/watchdog-missing.yml:ro
+    ports:
+      - "127.0.0.1:19090:9090"
+    depends_on:
+      - metrics-fixture
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:19093:9093"

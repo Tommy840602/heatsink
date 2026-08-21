@@ -71,12 +71,41 @@ Escalate immediately if the API is down while an active OpenFOAM campaign is run
 4. If the checkpoint or case fingerprint is invalid, return to case generation instead of bypassing validation.
 5. Keep `results_available=false` unless convergence, energy balance, and mesh-independence gates all pass.
 
+## ThermoformCaeRecoverySloFastBurn
+
+**Impact:** both the five-minute and one-hour windows are consuming the 99.5% recovery-availability error budget faster than 14.4x. If sustained, the thirty-day budget will be exhausted quickly.
+
+1. Treat this as a live recovery-path incident and correlate the alert start with API availability, watchdog age, stale heartbeats, Redis failures, and deployments.
+2. Confirm which SLI component is zero: `up{job="thermoform-api"}` or `thermoform_cae_observability_healthy`.
+3. Restore the API, scheduler, general worker, Redis, or shared artifact volume that is breaking the durable recovery path.
+4. Do not clear the alert by fabricating a watchdog report, lifecycle event, or successful CAE result.
+5. Escalate until both short windows fall below the 14.4x burn threshold and new watchdog intervals remain healthy.
+
+## ThermoformCaeRecoverySloSlowBurn
+
+**Impact:** both the thirty-minute and six-hour windows are consuming the 99.5% recovery-availability error budget faster than 6x, indicating persistent degradation that may not create a single obvious outage.
+
+1. Review the thirty-day availability and remaining error-budget panels before scheduling risky CAE or platform changes.
+2. Compare recurring unhealthy periods with queue depth, watchdog runtime, artifact scan duration, storage pressure, and worker capacity.
+3. Fix the recurring cause; silencing or restarting Prometheus does not restore the SLI and can hide additional budget loss.
+4. Validate two healthy six-hour-window evaluations before closing a recurring incident.
+
+## ThermoformCaeRecoverySliMissing
+
+**Impact:** Prometheus cannot calculate the composite recovery SLI, so neither burn-rate alerts nor the remaining error budget are trustworthy.
+
+1. Confirm the `thermoform-api` target exists and inspect Prometheus target discovery and rule-evaluation errors.
+2. Check that both `up{job="thermoform-api"}` and `thermoform_cae_observability_healthy{job="thermoform-api"}` have current samples with matching `job` and `instance` labels.
+3. Validate that `infra/prometheus/slo.yml` is loaded and the `thermoform-cae-slo-recording` group is healthy.
+4. Restore scrape or rule evaluation before interpreting the dashboard's availability and error-budget panels.
+
 ## Recovery verification
 
-- Prometheus target `thermoform-api` is up and all six rules are loaded.
+- Prometheus target `thermoform-api` is up and all nine alert rules are loaded.
 - Alertmanager shows the expected grouped receiver and no unexpected inhibited alerts.
 - `/api/v1/cae/observability` reports `healthy`, zero stale heartbeats, and a recent watchdog.
 - A repaired or retried attempt has one append-only terminal event and intact lineage.
 - Grafana shows at least two fresh watchdog intervals after recovery.
+- The 30-day recovery availability is at or above 99.5%, or the remaining error budget and follow-up mitigation are recorded in the incident.
 
 For production delivery, replace the mounted Alertmanager configuration with the webhook example, change the endpoint, and provide the bearer token as a runtime secret. Never commit receiver credentials.

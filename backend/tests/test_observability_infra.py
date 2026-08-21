@@ -16,6 +16,7 @@ def test_prometheus_scrapes_fastapi_and_loads_cae_alerts():
     assert "backend:8000" in config
     assert "metrics_path: /metrics" in config
     assert "/etc/prometheus/alerts.yml" in config
+    assert "/etc/prometheus/slo.yml" in config
     assert "alertmanager:9093" in config
     assert "ThermoformCaeWatchdogMissing" in alerts
     assert "ThermoformCaeWatchdogStale" in alerts
@@ -35,7 +36,17 @@ def test_grafana_dashboard_and_shared_watchdog_artifacts_are_provisioned():
     compose = ROOT.joinpath("docker-compose.yml").read_text(encoding="utf-8")
 
     assert dashboard["uid"] == "thermoform-cae-resume"
-    assert len(dashboard["panels"]) == 6
+    assert len(dashboard["panels"]) == 9
+    expressions = {
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel.get("targets", [])
+    }
+    assert "thermoform_cae:slo_recovery_availability:ratio_30d" in expressions
+    assert (
+        "thermoform_cae:slo_recovery_error_budget:remaining_ratio_30d"
+        in expressions
+    )
     assert "prometheus:" in compose
     assert "alertmanager:" in compose
     assert "grafana:" in compose
@@ -68,8 +79,49 @@ def test_alertmanager_groups_routes_and_inhibits_recovery_alerts():
         "ThermoformCaeResumeHeartbeatStale",
         "ThermoformCaeOrphanRepairDetected",
         "ThermoformCaeRetryFailed",
+        "ThermoformCaeRecoverySloFastBurn",
+        "ThermoformCaeRecoverySloSlowBurn",
+        "ThermoformCaeRecoverySliMissing",
     ):
         assert f"## {alert}" in runbook
+
+
+def test_recovery_slo_has_recording_rules_burn_alerts_and_promtool_tests():
+    rules = ROOT.joinpath("infra/prometheus/slo.yml").read_text(encoding="utf-8")
+    tests = ROOT.joinpath("infra/prometheus/tests/slo.test.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "thermoform_cae:sli_recovery_available" in rules
+    assert "ratio_30d" in rules
+    assert "remaining_ratio_30d" in rules
+    assert rules.count("objective: \"99.5\"") == 3
+    assert "ThermoformCaeRecoverySloFastBurn" in rules
+    assert "ThermoformCaeRecoverySloSlowBurn" in rules
+    assert "ThermoformCaeRecoverySliMissing" in rules
+    assert "healthy recovery preserves the complete error budget" in tests
+    assert "sustained recovery failure triggers multi-window burn alerts" in tests
+
+
+def test_observability_drill_is_isolated_and_checks_the_warning_route():
+    compose = ROOT.joinpath(
+        "infra/observability-drill/docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    rule = ROOT.joinpath(
+        "infra/observability-drill/watchdog-missing.yml"
+    ).read_text(encoding="utf-8")
+    script = ROOT.joinpath(
+        "scripts/run_observability_alert_drill.py"
+    ).read_text(encoding="utf-8")
+
+    assert "metrics-fixture:" in compose
+    assert "127.0.0.1:19090:9090" in compose
+    assert "127.0.0.1:19093:9093" in compose
+    assert "ThermoformCaeWatchdogMissingDrill" in rule
+    assert 'drill: "true"' in rule
+    assert 'PROJECT_NAME = "thermoform-observability-drill"' in script
+    assert 'receiver != "warning-operations"' in script
+    assert '"down", "--volumes", "--remove-orphans"' in script
 
 
 def test_ci_validates_every_observability_configuration():
@@ -80,6 +132,8 @@ def test_ci_validates_every_observability_configuration():
     assert "docker compose config --quiet" in workflow
     assert "promtool" in workflow
     assert "check config /etc/prometheus/prometheus.yml" in workflow
+    assert "test rules /etc/prometheus/tests/slo.test.yml" in workflow
     assert "amtool" in workflow
     assert "check-config /etc/alertmanager/alertmanager.yml" in workflow
     assert "python -m json.tool" in workflow
+    assert "python scripts/run_observability_alert_drill.py" in workflow

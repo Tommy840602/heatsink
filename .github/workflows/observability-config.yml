@@ -7,6 +7,7 @@ on:
       - docker-compose.yml
       - infra/**
       - docs/runbooks/cae-observability.md
+      - scripts/run_observability_alert_drill.py
   push:
     branches:
       - main
@@ -15,6 +16,7 @@ on:
       - docker-compose.yml
       - infra/**
       - docs/runbooks/cae-observability.md
+      - scripts/run_observability_alert_drill.py
 
 permissions:
   contents: read
@@ -36,6 +38,10 @@ jobs:
             -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
             prom/prometheus:v3.5.5 \
             check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.5 \
+            test rules /etc/prometheus/tests/slo.test.yml
 
       - name: Validate Alertmanager routes
         run: |
@@ -50,3 +56,14 @@ jobs:
 
       - name: Validate Grafana dashboard JSON
         run: python -m json.tool infra/grafana/dashboards/cae-resume-observability.json >/dev/null
+
+  alert-drill:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Exercise Prometheus to Alertmanager routing
+        run: python scripts/run_observability_alert_drill.py
