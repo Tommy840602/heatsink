@@ -60,6 +60,9 @@ def analyze(records: list[dict[str, float | int]], response: str = "t_max") -> d
         {"term": name.replace(" ", " × ").replace("^2", "²"), "coefficient": round(float(value), 8)}
         for name, value in zip(names, model.coef_, strict=True)
     ]
+    correlation_names = [*FEATURES, response]
+    correlation_values = np.column_stack([x, y])
+    correlation_matrix = np.corrcoef(correlation_values, rowvar=False)
 
     return {
         "response": response,
@@ -85,6 +88,10 @@ def analyze(records: list[dict[str, float | int]], response: str = "t_max") -> d
             },
         ],
         "coefficients": coefficient_rows,
+        "correlation": {
+            "variables": correlation_names,
+            "matrix": correlation_matrix.round(6).tolist(),
+        },
         "main_effects": [row for row in terms if "×" not in str(row["source"]) and "²" not in str(row["source"])],
         "interactions": [row for row in terms if "×" in str(row["source"])],
         "diagnostics": {

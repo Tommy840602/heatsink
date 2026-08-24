@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -15,19 +16,90 @@ class ArtifactRepository:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         return f"{prefix}_{hashlib.sha256(encoded).hexdigest()[:12]}"
 
-    def save_dataset(self, records: list[dict[str, Any]]) -> str:
+    def save_dataset(
+        self,
+        records: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
         version = self.version(records, "dataset")
-        path = self.root / "experiments" / f"{version}.json"
+        path = self.root / "experiments" / f"{version}.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_text(json.dumps(records, indent=2, sort_keys=True), encoding="utf-8")
+            temporary = path.with_suffix(".parquet.tmp")
+            table = pa.Table.from_pylist(records)
+            pq.write_table(table, temporary, compression="zstd")
+            temporary.replace(path)
+            manifest = path.with_suffix(".metadata.json")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "dataset_version": version,
+                        "format": "parquet",
+                        "compression": "zstd",
+                        "rows": len(records),
+                        "columns": table.column_names,
+                        "artifact": path.name,
+                        **(metadata or {}),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
         return version
 
     def load_dataset(self, version: str) -> list[dict[str, Any]]:
-        path = self.root / "experiments" / f"{version}.json"
-        if not path.exists():
-            raise FileNotFoundError(version)
-        return json.loads(path.read_text(encoding="utf-8"))
+        import pyarrow.parquet as pq
+
+        parquet_path = self.root / "experiments" / f"{version}.parquet"
+        if parquet_path.exists():
+            return pq.read_table(parquet_path).to_pylist()
+        legacy_path = self.root / "experiments" / f"{version}.json"
+        if legacy_path.exists():
+            return json.loads(legacy_path.read_text(encoding="utf-8"))
+        raise FileNotFoundError(version)
+
+    def publish_project_view(
+        self,
+        project_id: str,
+        dataset_version: str,
+        model_id: str | None = None,
+        *,
+        dataset_kind: str = "simulation",
+    ) -> dict[str, str]:
+        """Create immutable, project-scoped hard-link views of shared artifacts."""
+        source_dataset = self.root / "experiments" / f"{dataset_version}.parquet"
+        project_dataset = (
+            self.root
+            / "experiments"
+            / project_id
+            / dataset_version
+            / f"{dataset_kind}.parquet"
+        )
+        project_dataset.parent.mkdir(parents=True, exist_ok=True)
+        if source_dataset.exists() and not project_dataset.exists():
+            try:
+                os.link(source_dataset, project_dataset)
+            except OSError:
+                shutil.copy2(source_dataset, project_dataset)
+        result = {"dataset": str(project_dataset)}
+        if model_id:
+            source_model = self.root / "models" / model_id
+            project_model = self.root / "models" / project_id / model_id
+            project_model.mkdir(parents=True, exist_ok=True)
+            for filename in ("bundle.joblib", "metadata.json"):
+                source = source_model / filename
+                target = project_model / filename
+                if source.exists() and not target.exists():
+                    try:
+                        os.link(source, target)
+                    except OSError:
+                        shutil.copy2(source, target)
+            result["model"] = str(project_model)
+        return result
 
     def save_model(self, model_id: str, bundle: dict[str, Any], metadata: dict[str, Any]) -> None:
         import joblib
@@ -60,6 +132,14 @@ class ArtifactRepository:
         path = directory / filename
         if not path.exists():
             path.write_text(content, encoding="utf-8")
+        return path
+
+    def save_agent_run(self, agent_run_id: str, payload: dict[str, Any]) -> Path:
+        directory = self.root / "agent" / agent_run_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "run.json"
+        if not path.exists():
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
         return path
 
     def cad_artifact_path(self, cad_id: str, filename: str) -> Path:

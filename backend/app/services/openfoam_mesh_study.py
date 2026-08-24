@@ -92,6 +92,32 @@ def evaluate_mesh_independence(
     )
     mesh_independent = bool(not errors and t_max_passed and pressure_drop_passed)
     fine = campaigns.get("fine")
+    dataset_version = None
+    if mesh_independent and fine:
+        # Only the final, numerically converged and mesh-independent response is
+        # admitted to the engineering dataset.  Smoke, unconverged, and
+        # single-mesh values remain diagnostics and can never reach this path.
+        dataset_version = repository.save_dataset(
+            [
+                {
+                    **(fine.get("design") or {}),
+                    **(fine.get("responses") or {}),
+                    "source": "OpenFOAM chtMultiRegionFoam",
+                    "result_kind": "validated_cfd",
+                    "mesh_profile": "fine",
+                    "mesh_study_id": study_id,
+                    "study_fingerprint": fine.get("study_fingerprint"),
+                    **(fine.get("boundary_conditions") or {}),
+                }
+            ],
+            metadata={
+                "source": "OpenFOAM chtMultiRegionFoam",
+                "result_kind": "validated_cfd",
+                "mesh_independence_validated": True,
+                "mesh_study_id": study_id,
+                "campaign_ids": request.campaign_ids,
+            },
+        )
     result = {
         "mesh_study_id": study_id,
         "contract_version": MESH_STUDY_CONTRACT_VERSION,
@@ -116,6 +142,7 @@ def evaluate_mesh_independence(
         "not_cfd_result": not mesh_independent,
         "recommended_profile": "fine" if mesh_independent else None,
         "responses": fine.get("responses") if fine and mesh_independent else None,
+        "dataset_version": dataset_version,
         "generated_at": datetime.now(UTC).isoformat(),
         "downloads": {
             "report": f"/api/v1/cae/{study_id}/artifacts/{report_name}"

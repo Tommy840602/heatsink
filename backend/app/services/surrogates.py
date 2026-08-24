@@ -1,67 +1,42 @@
 import time
+import math
 from typing import Any
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.compose import TransformedTargetRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold, cross_val_score, train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-from xgboost import XGBRegressor
+from scipy import stats
 
 from app.domain.phase1 import FEATURES, RESPONSES
 from app.repositories.artifacts import ArtifactRepository
+from app.engineering.surrogate.models import build_surrogate_models
 
 
 def build_models(seed: int) -> dict[str, Any]:
-    return {
-        "RSM": Pipeline(
-            [("scale", StandardScaler()), ("poly", PolynomialFeatures(2, include_bias=False)), ("model", LinearRegression())]
-        ),
-        "RandomForest": RandomForestRegressor(
-            n_estimators=160, min_samples_leaf=2, random_state=seed, n_jobs=1
-        ),
-        "XGBoost": XGBRegressor(
-            n_estimators=160,
-            max_depth=3,
-            learning_rate=0.045,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            objective="reg:squarederror",
-            random_state=seed,
-            n_jobs=1,
-        ),
-        "GPR": TransformedTargetRegressor(
-            regressor=Pipeline(
-                [
-                    ("scale", StandardScaler()),
-                    (
-                        "model",
-                        GaussianProcessRegressor(
-                            kernel=ConstantKernel(1.0, (1e-2, 1e2))
-                            * Matern(length_scale=np.ones(len(FEATURES)), nu=2.5)
-                            + WhiteKernel(noise_level=1e-5, noise_level_bounds=(1e-8, 1e0)),
-                            normalize_y=False,
-                            n_restarts_optimizer=1,
-                            random_state=seed,
-                        ),
-                    ),
-                ]
-            ),
-            transformer=StandardScaler(),
-        ),
-    }
+    return {name: model.estimator for name, model in build_surrogate_models(seed).items()}
 
 
 def records_to_xy(records: list[dict[str, float | int]], response: str) -> tuple[np.ndarray, np.ndarray]:
     x = np.asarray([[float(row[name]) for name in FEATURES] for row in records], dtype=float)
     y = np.asarray([float(row[response]) for row in records], dtype=float)
     return x, y
+
+
+def _serializable_parameters(estimator: Any) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for key, value in estimator.get_params(deep=True).items():
+        if isinstance(value, float) and not math.isfinite(value):
+            snapshot[key] = None
+        elif value is None or isinstance(value, (bool, int, float, str)):
+            snapshot[key] = value
+        elif isinstance(value, (list, tuple)) and all(
+            item is None or isinstance(item, (bool, int, float, str)) for item in value
+        ):
+            snapshot[key] = list(value)
+        else:
+            snapshot[key] = str(value)
+    return snapshot
 
 
 def train_surrogates(
@@ -71,6 +46,7 @@ def train_surrogates(
     bundle: dict[str, Any] = {"features": FEATURES, "responses": {}}
     metrics_by_response: dict[str, Any] = {}
     selected: dict[str, str] = {}
+    hyperparameters: dict[str, dict[str, Any]] = {}
 
     for response in RESPONSES:
         x, y = records_to_xy(records, response)
@@ -78,9 +54,11 @@ def train_surrogates(
         folds = min(5, max(3, len(x_train) // 8))
         cv = KFold(n_splits=folds, shuffle=True, random_state=seed)
         response_models: dict[str, Any] = {}
+        response_parameters: dict[str, Any] = {}
         response_metrics: list[dict[str, float | str]] = []
 
         for name, estimator in build_models(seed).items():
+            response_parameters[name] = _serializable_parameters(estimator)
             start = time.perf_counter()
             estimator.fit(x_train, y_train)
             training_ms = (time.perf_counter() - start) * 1000
@@ -100,6 +78,14 @@ def train_surrogates(
                 "cv_rmse": round(cv_rmse, 6),
                 "training_ms": round(training_ms, 3),
                 "inference_ms": round(inference_ms, 3),
+                "inference_ms_per_sample": round(inference_ms / max(len(y_test), 1), 6),
+                "generalization_error": round(float(mean_squared_error(y_test, predicted) ** 0.5), 6),
+                "residual_distribution": {
+                    "mean": round(float(np.mean(y_test - predicted)), 6),
+                    "std": round(float(np.std(y_test - predicted)), 6),
+                    "skewness": round(float(stats.skew(y_test - predicted)), 6),
+                    "kurtosis": round(float(stats.kurtosis(y_test - predicted)), 6),
+                },
             }
             response_metrics.append(metrics)
             estimator.fit(x, y)
@@ -110,12 +96,20 @@ def train_surrogates(
         selected[response] = winner
         metrics_by_response[response] = response_metrics
         bundle["responses"][response] = {"selected": winner, "models": response_models}
+        hyperparameters[response] = response_parameters
 
     fingerprint = {
         "seed": seed,
         "rows": len(records),
         "selected": selected,
         "metrics": metrics_by_response,
+        "hyperparameters": hyperparameters,
+        "evaluation": {
+            "test_fraction": 0.22,
+            "cross_validation": "shuffled KFold",
+            "selection_rule": "lowest cross-validated RMSE",
+            "training_r2_used_for_selection": False,
+        },
     }
     model_id = repository.version(fingerprint, "model")
     repository.save_model(model_id, bundle, {**fingerprint, "model_id": model_id})

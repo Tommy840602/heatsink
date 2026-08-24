@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { api } from "../lib/api";
 
 const nav = [
@@ -13,6 +15,7 @@ const nav = [
   ["optimization", "◎", "Optimization"],
   ["digital-twin", "◫", "Digital Twin"],
   ["cae-operations", "◉", "CAE Operations"],
+  ["agent", "✦", "Engineering Agent"],
   ["cad", "⬡", "CAD"],
 ];
 
@@ -74,8 +77,13 @@ function PageHead({ kicker, title, description, badge }) {
 }
 
 function Overview({ go, phase1 }) {
+  const [persistedOverview, setPersistedOverview] = useState(null);
+  useEffect(() => {
+    const projectId = window.localStorage.getItem("thermoform:project-id");
+    api.overview(projectId).then(setPersistedOverview).catch(() => setPersistedOverview(null));
+  }, []);
   const modelMetrics = phase1?.model_metrics.t_max ?? demoMetrics;
-  const selectedModel = phase1?.selected_models.t_max ?? "GPR";
+  const selectedModel = phase1?.selected_models.t_max ?? persistedOverview?.best_model ?? "GPR";
   const recommended = phase1?.optimization.recommended;
   const responses = recommended?.responses;
   const design = recommended?.design;
@@ -95,12 +103,12 @@ function Overview({ go, phase1 }) {
         kicker="THERMAL DESIGN WORKSPACE"
         title="System overview"
         description="Monitor the engineering workflow from design space to optimized geometry."
-        badge="Workflow healthy"
+        badge={`Project ${persistedOverview?.project_status ?? "ready"}`}
       />
       <div className="metrics">
         <article>
           <small>EXPERIMENTS</small>
-          <strong>{phase1?.experiment_count ?? 64}</strong>
+          <strong>{phase1?.experiment_count ?? persistedOverview?.experiments ?? 0}</strong>
           <p>
             <span className="up">↗ 12</span> since last run
           </p>
@@ -122,7 +130,7 @@ function Overview({ go, phase1 }) {
             BEST T<sub>MAX</sub>
           </small>
           <strong>
-            {(responses?.t_max ?? 68.4).toFixed(1)}<em>°C</em>
+            {(responses?.t_max ?? persistedOverview?.current_t_max ?? 68.4).toFixed(1)}<em>°C</em>
           </strong>
           <p>
             <span className="down">↓ 8.2°C</span> vs. baseline
@@ -132,7 +140,7 @@ function Overview({ go, phase1 }) {
         <article>
           <small>EST. MASS</small>
           <strong>
-            {(responses?.mass ?? 287).toFixed(0)}<em>g</em>
+            {(responses?.mass ?? persistedOverview?.current_mass ?? 287).toFixed(0)}<em>g</em>
           </strong>
           <p>
             <span className="down">↓ 13%</span> vs. baseline
@@ -260,6 +268,181 @@ function HeatSink({ count = 10 }) {
   );
 }
 
+function disposeScene(scene, renderer, controls, frame) {
+  window.cancelAnimationFrame(frame);
+  controls?.dispose();
+  scene.traverse((object) => {
+    object.geometry?.dispose();
+    if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
+    else object.material?.dispose();
+  });
+  renderer.dispose();
+  renderer.domElement.remove();
+}
+
+function ThreeHeatSink({ design }) {
+  const mount = useRef(null);
+  useEffect(() => {
+    const host = mount.current;
+    if (!host) return undefined;
+    const width = Math.max(host.clientWidth, 320);
+    const height = Math.max(host.clientHeight, 320);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07121f);
+    const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+    camera.position.set(8, 7, 9);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(width, height);
+    renderer.shadowMap.enabled = true;
+    host.replaceChildren(renderer.domElement);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 1.4, 0);
+
+    scene.add(new THREE.HemisphereLight(0xcde7ff, 0x17243a, 2.4));
+    const key = new THREE.DirectionalLight(0xffffff, 3.2);
+    key.position.set(6, 10, 4);
+    key.castShadow = true;
+    scene.add(key);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x9aaec0,
+      metalness: 0.78,
+      roughness: 0.25,
+    });
+    const base = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.35, 5.2), material);
+    base.position.y = 0.175;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    scene.add(base);
+    const visibleFins = Math.min(design.fin_count, 60);
+    const finHeight = THREE.MathUtils.mapLinear(design.fin_height, 20, 60, 1.8, 4.5);
+    for (let index = 0; index < visibleFins; index += 1) {
+      const fin = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.max(design.fin_thickness * 0.12, 0.035), finHeight, 5),
+        material,
+      );
+      fin.position.set(-3.45 + (index / Math.max(visibleFins - 1, 1)) * 6.9, finHeight / 2 + 0.35, 0);
+      fin.castShadow = true;
+      scene.add(fin);
+    }
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 30),
+      new THREE.MeshStandardMaterial({ color: 0x081827, roughness: 0.9 }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    let frame = 0;
+    const render = () => {
+      controls.update();
+      renderer.render(scene, camera);
+      frame = window.requestAnimationFrame(render);
+    };
+    render();
+    const resize = new ResizeObserver(() => {
+      const nextWidth = Math.max(host.clientWidth, 320);
+      const nextHeight = Math.max(host.clientHeight, 320);
+      camera.aspect = nextWidth / nextHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(nextWidth, nextHeight);
+    });
+    resize.observe(host);
+    return () => {
+      resize.disconnect();
+      disposeScene(scene, renderer, controls, frame);
+    };
+  }, [design]);
+  return <div className="three-viewer" ref={mount} data-testid="three-cad-viewer" />;
+}
+
+function ResponseSurface({ data }) {
+  const mount = useRef(null);
+  useEffect(() => {
+    const host = mount.current;
+    if (!host || !data?.z?.length) return undefined;
+    const width = Math.max(host.clientWidth, 320);
+    const height = Math.max(host.clientHeight, 260);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07121f);
+    const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+    camera.position.set(7, 7, 8);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(width, height);
+    host.replaceChildren(renderer.domElement);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    const rows = data.z.length;
+    const columns = data.z[0].length;
+    const values = data.z.flat();
+    const minimum = Math.min(...values);
+    const maximum = Math.max(...values);
+    const span = Math.max(maximum - minimum, 1e-9);
+    const geometry = new THREE.PlaneGeometry(8, 6, columns - 1, rows - 1);
+    const colors = [];
+    for (let index = 0; index < geometry.attributes.position.count; index += 1) {
+      const value = values[index];
+      geometry.attributes.position.setZ(index, ((value - minimum) / span) * 3);
+      const color = new THREE.Color().setHSL(0.64 - ((value - minimum) / span) * 0.58, 0.82, 0.56);
+      colors.push(color.r, color.g, color.b);
+    }
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.computeVertexNormals();
+    const surface = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.48 }),
+    );
+    surface.rotation.x = -Math.PI / 2;
+    surface.position.y = -1.4;
+    scene.add(surface);
+    scene.add(new THREE.HemisphereLight(0xd8eeff, 0x16243a, 2.7));
+    const light = new THREE.DirectionalLight(0xffffff, 2.6);
+    light.position.set(5, 8, 4);
+    scene.add(light);
+    controls.target.set(0, 0, 0);
+    let frame = 0;
+    const render = () => {
+      controls.update();
+      renderer.render(scene, camera);
+      frame = window.requestAnimationFrame(render);
+    };
+    render();
+    return () => disposeScene(scene, renderer, controls, frame);
+  }, [data]);
+
+  if (!data?.z?.length) return <div className="surface-loading">Run Phase 1 to calculate a model surface.</div>;
+  const values = data.z.flat();
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const span = Math.max(maximum - minimum, 1e-9);
+  return (
+    <div className="engineering-surface" data-testid="computed-response-surface">
+      <div className="surface-3d" ref={mount} />
+      <svg className="contour-plot" viewBox={`0 0 ${data.resolution} ${data.resolution}`} role="img" aria-label="Computed response contour">
+        {data.z.flatMap((row, yIndex) =>
+          row.map((value, xIndex) => (
+            <rect
+              key={`${xIndex}-${yIndex}`}
+              x={xIndex}
+              y={data.resolution - yIndex - 1}
+              width="1.05"
+              height="1.05"
+              fill={`hsl(${225 - ((value - minimum) / span) * 205} 78% 52%)`}
+            />
+          )),
+        )}
+      </svg>
+      <div className="surface-legend">
+        <span>{labelFor(data.x_axis)} →</span>
+        <span>{data.response}: {minimum.toFixed(2)}–{maximum.toFixed(2)}</span>
+        <span>{labelFor(data.y_axis)} ↑</span>
+      </div>
+    </div>
+  );
+}
+
 function ModuleView({
   active,
   notify,
@@ -275,6 +458,7 @@ function ModuleView({
   const [method, setMethod] = useState("LHS");
   const [runs, setRuns] = useState(64);
   const [fins, setFins] = useState(48);
+  const [thickness, setThickness] = useState(0.65);
   const [height, setHeight] = useState(52);
   const [spacing, setSpacing] = useState(2.4);
   const [velocity, setVelocity] = useState(3.2);
@@ -286,6 +470,12 @@ function ModuleView({
   const [benchmarkArtifact, setBenchmarkArtifact] = useState(null);
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [apiPrediction, setApiPrediction] = useState(null);
+  const [projectId, setProjectId] = useState(null);
+  const [savedDesign, setSavedDesign] = useState(null);
+  const [surfaceData, setSurfaceData] = useState(null);
+  const [surfaceXAxis, setSurfaceXAxis] = useState("fin_height");
+  const [surfaceYAxis, setSurfaceYAxis] = useState("air_velocity");
+  const [surfaceResponse, setSurfaceResponse] = useState("t_max");
   const [meshProfile, setMeshProfile] = useState("medium");
   const [targetEndTime, setTargetEndTime] = useState(0.01);
   const [segmentDuration, setSegmentDuration] = useState(0.001);
@@ -303,18 +493,23 @@ function ModuleView({
   const [resumeWatchdog, setResumeWatchdog] = useState(null);
   const [caeObservability, setCaeObservability] = useState(null);
   const [caeHistoryLoading, setCaeHistoryLoading] = useState(false);
+  const [agentInstruction, setAgentInstruction] = useState(
+    "找出 Tmax < 75°C、Mass < 300 g，且壓降最低的設計，並產生 CAD",
+  );
+  const [agentResult, setAgentResult] = useState(null);
+  const [agentRunning, setAgentRunning] = useState(false);
   const [resumeChecking, setResumeChecking] = useState(false);
   const [resumePreview, setResumePreview] = useState(null);
   const monitoredCaeJobRef = useRef(null);
   const design = useMemo(
     () => ({
       fin_count: fins,
-      fin_thickness: 0.65,
+      fin_thickness: thickness,
       fin_height: height,
       fin_spacing: spacing,
       air_velocity: velocity,
     }),
-    [fins, height, spacing, velocity],
+    [fins, thickness, height, spacing, velocity],
   );
   const temp = (
     91.6 -
@@ -338,6 +533,28 @@ function ModuleView({
     }, 180);
     return () => window.clearTimeout(timer);
   }, [active, design, phase1, phase2]);
+  useEffect(() => {
+    if (active !== "digital-twin") return;
+    const modelId = phase2?.model_id ?? phase1?.model_id;
+    if (!modelId || surfaceXAxis === surfaceYAxis) {
+      setSurfaceData(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      api
+        .responseSurface(
+          modelId,
+          surfaceXAxis,
+          surfaceYAxis,
+          surfaceResponse,
+          design,
+          24,
+        )
+        .then(setSurfaceData)
+        .catch(() => setSurfaceData(null));
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [active, design, phase1, phase2, surfaceResponse, surfaceXAxis, surfaceYAxis]);
   const predictedTemp = apiPrediction?.t_max.toFixed(1) ?? temp;
   const predictedTheta =
     apiPrediction?.thermal_resistance.toFixed(3) ?? theta;
@@ -379,6 +596,17 @@ function ModuleView({
   const fittedMin = Math.min(...(fittedValues.length ? fittedValues : [0]));
   const fittedSpan = Math.max(Math.max(...(fittedValues.length ? fittedValues : [1])) - fittedMin, 0.001);
   const residualMax = Math.max(...(residualValues.length ? residualValues.map(Math.abs) : [1]), 0.001);
+  const qqPoints = analysis?.diagnostics.qq_plot ?? [];
+  const qqTheoretical = qqPoints.map((point) => point.theoretical);
+  const qqSamples = qqPoints.map((point) => point.sample);
+  const qqTheoryMin = Math.min(...(qqTheoretical.length ? qqTheoretical : [-1]));
+  const qqTheorySpan = Math.max(Math.max(...(qqTheoretical.length ? qqTheoretical : [1])) - qqTheoryMin, 0.001);
+  const qqSampleMin = Math.min(...(qqSamples.length ? qqSamples : [-1]));
+  const qqSampleSpan = Math.max(Math.max(...(qqSamples.length ? qqSamples : [1])) - qqSampleMin, 0.001);
+  const histogram = analysis?.diagnostics.histogram;
+  const histogramMax = Math.max(...(histogram?.counts ?? [1]), 1);
+  const predictionErrors = analysis?.diagnostics.prediction_error ?? [];
+  const predictionErrorMax = Math.max(...(predictionErrors.length ? predictionErrors.map(Math.abs) : [1]), 0.001);
   const paretoForChart = pareto.length ? pareto.slice(0, 12) : [];
   const paretoMasses = paretoForChart.map((item) => item.responses.mass);
   const paretoTemps = paretoForChart.map((item) => item.responses.t_max);
@@ -397,6 +625,30 @@ function ModuleView({
       );
     } catch {
       notify("CAD backend unavailable or geometry bounds are invalid");
+    }
+  };
+  const persistDesign = async () => {
+    try {
+      let activeProjectId = projectId;
+      if (!activeProjectId) {
+        const projects = await api.listProjects();
+        const existing = projects.data?.find((project) => project.status === "active");
+        if (existing) activeProjectId = existing.id;
+        else {
+          const created = await api.createProject(
+            "CPU Heat Sink Optimization",
+            "Engineering design space persisted from the React workspace.",
+          );
+          activeProjectId = created.data.id;
+        }
+        setProjectId(activeProjectId);
+        window.localStorage.setItem("thermoform:project-id", activeProjectId);
+      }
+      const result = await api.saveDesign(activeProjectId, "Primary design space", design);
+      setSavedDesign(result.data);
+      notify(`Design persisted · ${result.data.id} · version ${result.data.version}`);
+    } catch {
+      notify("Design persistence failed · check PostgreSQL and API readiness");
     }
   };
   const downloadCadArtifact = (path) => {
@@ -706,6 +958,93 @@ function ModuleView({
       disposed = true;
     };
   }, [active]);
+  if (active === "agent")
+    return (
+      <div className="content">
+        <PageHead
+          kicker="BOUNDED ENGINEERING AUTOMATION"
+          title="Engineering agent"
+          description="Translate a natural-language objective into auditable DOE, simulation, evaluation, optimization, comparison, and CAD tools."
+          badge="Deterministic · no arbitrary code"
+        />
+        <div className="module-grid">
+          <section className="panel agent-console">
+            <div className="panel-title">
+              <div>
+                <h2>Engineering objective</h2>
+                <p>The agent may call only seven allow-listed engineering tools.</p>
+              </div>
+              <span className="tag">SEED 42</span>
+            </div>
+            <textarea
+              aria-label="Engineering objective"
+              value={agentInstruction}
+              onChange={(event) => setAgentInstruction(event.target.value)}
+            />
+            <div className="agent-tools">
+              {["run_doe", "run_simulation", "train_surrogate", "evaluate_models", "optimize_design", "compare_designs", "generate_cad"].map((tool) => (
+                <code key={tool}>{tool}()</code>
+              ))}
+            </div>
+            <button
+              className="primary-action"
+              disabled={agentRunning}
+              onClick={async () => {
+                setAgentRunning(true);
+                try {
+                  const result = await api.executeAgent(
+                    agentInstruction,
+                    { runs: 48, generations: 20, t_max_limit: 75 },
+                    setJobStatus,
+                  );
+                  setAgentResult(result);
+                  notify(`Agent completed · ${result.agent_run_id}`);
+                } catch {
+                  notify("Engineering agent could not complete the requested tool plan");
+                } finally {
+                  setAgentRunning(false);
+                }
+              }}
+            >
+              {agentRunning ? "Executing tool plan…" : "Execute engineering plan"} <span>→</span>
+            </button>
+          </section>
+          <section className="panel agent-trace">
+            <div className="panel-title">
+              <div>
+                <h2>Auditable trace</h2>
+                <p>Every tool result references immutable engineering artifacts.</p>
+              </div>
+              {agentResult && <span className="candidate">COMPLETED</span>}
+            </div>
+            {!agentResult ? (
+              <p className="disclaimer">Execute a plan to see tool reasons, evidence, recommendation, and traceability.</p>
+            ) : (
+              <>
+                {agentResult.plan.map((step, index) => (
+                  <div className="agent-step" key={`${step.tool}-${index}`}>
+                    <b>{index + 1}. {step.tool}()</b>
+                    <small>{step.reason}</small>
+                  </div>
+                ))}
+                <div className="artifact">
+                  <span>AGENT RUN</span>
+                  <code>{agentResult.agent_run_id}</code>
+                  <small>{agentResult.traceability.planner} · arbitrary code disabled</small>
+                </div>
+                {agentResult.recommendation?.responses && (
+                  <div className="preview-stats">
+                    <span><small>TMAX</small><b>{agentResult.recommendation.responses.t_max.toFixed(1)}°C</b></span>
+                    <span><small>MASS</small><b>{agentResult.recommendation.responses.mass.toFixed(0)} g</b></span>
+                    <span><small>ΔP</small><b>{agentResult.recommendation.responses.pressure_drop.toFixed(1)} Pa</b></span>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+    );
   if (active === "design")
     return (
       <div className="content">
@@ -762,21 +1101,22 @@ function ModuleView({
                 min=".3"
                 max="1"
                 step=".1"
-                defaultValue=".65"
+                value={thickness}
+                onChange={(event) => setThickness(Number(event.target.value))}
               />
-              <output>0.65 mm</output>
+              <output>{thickness.toFixed(2)} mm</output>
             </label>
             <button
               className="primary-action"
-              onClick={() =>
-                api
-                  .validateDesign(design)
-                  .then(() => notify("FastAPI validated design space · version 13"))
-                  .catch(() => notify("Backend unavailable · design kept locally"))
-              }
+              onClick={persistDesign}
             >
               Save design space <span>→</span>
             </button>
+            {savedDesign && (
+              <p className="persisted-record">
+                PostgreSQL record {savedDesign.id} · immutable version {savedDesign.version}
+              </p>
+            )}
           </section>
           <section className="panel preview-panel">
             <div className="panel-title">
@@ -802,7 +1142,7 @@ function ModuleView({
               </span>
               <span>
                 <small>OPEN RATIO</small>
-                <b>{Math.round((spacing / (spacing + 0.65)) * 100)}%</b>
+                <b>{Math.round((spacing / (spacing + thickness)) * 100)}%</b>
               </span>
             </div>
           </section>
@@ -820,7 +1160,7 @@ function ModuleView({
         />
         <section className="panel toolbar-panel">
           <div className="method-tabs">
-            {["CCD", "BBD", "LHS"].map((x) => (
+            {["Full Factorial", "Fractional Factorial", "CCD", "BBD", "LHS"].map((x) => (
               <button
                 className={method === x ? "selected" : ""}
                 onClick={() => setMethod(x)}
@@ -832,6 +1172,8 @@ function ModuleView({
                     ? "Response surface"
                     : x === "BBD"
                       ? "Efficient quadratic"
+                      : x.includes("Factorial")
+                        ? "Factor effects"
                       : "Space filling"}
                 </small>
               </button>
@@ -841,8 +1183,8 @@ function ModuleView({
             RUNS{" "}
             <input
               type="number"
-              min="30"
-              max="100"
+              min="8"
+              max="256"
               value={runs}
               onChange={(e) => setRuns(Number(e.target.value))}
             />
@@ -1169,6 +1511,90 @@ function ModuleView({
               </span>
             </div>
           </section>
+          <section className="panel diagnostics-quartet">
+            <div className="panel-title">
+              <div>
+                <h2>Distribution diagnostics</h2>
+                <p>QQ plot · histogram · prediction error</p>
+              </div>
+              <span className="tag">RESIDUALS</span>
+            </div>
+            <div className="diagnostic-plots">
+              <figure>
+                <figcaption>QQ Plot</figcaption>
+                <svg viewBox="0 0 100 70" aria-label="Residual QQ plot">
+                  <line x1="8" y1="62" x2="92" y2="8" />
+                  {qqPoints.map((point, index) => (
+                    <circle
+                      key={index}
+                      cx={8 + ((point.theoretical - qqTheoryMin) / qqTheorySpan) * 84}
+                      cy={62 - ((point.sample - qqSampleMin) / qqSampleSpan) * 54}
+                      r="1.5"
+                    />
+                  ))}
+                </svg>
+              </figure>
+              <figure>
+                <figcaption>Histogram</figcaption>
+                <svg viewBox="0 0 100 70" aria-label="Residual histogram">
+                  {(histogram?.counts ?? []).map((count, index, counts) => (
+                    <rect
+                      key={index}
+                      x={6 + (index / counts.length) * 88}
+                      y={63 - (count / histogramMax) * 52}
+                      width={Math.max(88 / counts.length - 1, 1)}
+                      height={(count / histogramMax) * 52}
+                    />
+                  ))}
+                </svg>
+              </figure>
+              <figure>
+                <figcaption>Prediction Error</figcaption>
+                <svg viewBox="0 0 100 70" aria-label="Prediction error by experiment">
+                  <line x1="5" y1="35" x2="95" y2="35" />
+                  {predictionErrors.map((error, index) => (
+                    <circle
+                      key={index}
+                      cx={5 + (index / Math.max(predictionErrors.length - 1, 1)) * 90}
+                      cy={35 - (error / predictionErrorMax) * 28}
+                      r="1.4"
+                    />
+                  ))}
+                </svg>
+              </figure>
+            </div>
+          </section>
+          <section className="panel correlation-panel">
+            <div className="panel-title">
+              <div>
+                <h2>Correlation matrix</h2>
+                <p>Inputs and selected response</p>
+              </div>
+              <span className="candidate">PEARSON</span>
+            </div>
+            <div
+              className="correlation-grid"
+              style={{
+                gridTemplateColumns: `repeat(${analysis?.correlation.variables.length ?? 1}, 1fr)`,
+              }}
+            >
+              {(analysis?.correlation.matrix ?? []).flatMap((row, rowIndex) =>
+                row.map((value, columnIndex) => (
+                  <span
+                    key={`${rowIndex}-${columnIndex}`}
+                    title={`${analysis.correlation.variables[rowIndex]} × ${analysis.correlation.variables[columnIndex]}`}
+                    style={{
+                      background: value >= 0
+                        ? `rgba(44, 178, 255, ${0.15 + Math.abs(value) * 0.75})`
+                        : `rgba(255, 91, 116, ${0.15 + Math.abs(value) * 0.75})`,
+                    }}
+                  >
+                    {value.toFixed(2)}
+                  </span>
+                )),
+              )}
+            </div>
+          </section>
           <section className="panel wide">
             <div className="panel-title">
               <div>
@@ -1238,6 +1664,9 @@ function ModuleView({
               <span>MAE</span>
               <span>CV RMSE</span>
               <span>TRAINING</span>
+              <span>INFERENCE</span>
+              <span>GEN. ERROR</span>
+              <span>RESIDUAL σ</span>
               <span>STATUS</span>
             </div>
             {modelMetrics.map((metric) => {
@@ -1248,6 +1677,9 @@ function ModuleView({
                 `${metric.mae.toFixed(2)}°C`,
                 `${metric.cv_rmse.toFixed(2)}°C`,
                 `${metric.training_ms.toFixed(0)} ms`,
+                `${(metric.inference_ms ?? 0).toFixed(2)} ms`,
+                `${(metric.generalization_error ?? metric.rmse).toFixed(2)}°C`,
+                `${(metric.residual_distribution?.std ?? 0).toFixed(2)}`,
               ];
               return (
               <button
@@ -1547,30 +1979,39 @@ function ModuleView({
               <div>
                 <h2>Response surface</h2>
                 <p>
-                  Fin height × air velocity → T<sub>max</sub>
+                  Calculated surrogate grid · drag to rotate the 3D surface
                 </p>
               </div>
               <span className="candidate">GPR μ(x)</span>
             </div>
-            <div className="surface">
-              <div className="contours">
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <i key={i} />
-                ))}
-              </div>
-              <span
-                className="current"
-                style={{
-                  left: `${25 + velocity * 9}%`,
-                  top: `${78 - height}%`,
-                }}
-              >
-                ●<b>CURRENT</b>
-              </span>
-              <span className="optimal">
-                ★<b>OPTIMAL</b>
-              </span>
+            <div className="surface-selectors">
+              <label>
+                X AXIS
+                <select value={surfaceXAxis} onChange={(event) => setSurfaceXAxis(event.target.value)}>
+                  {Object.keys(design).filter((key) => !["heat_load", "ambient_temperature"].includes(key)).map((key) => (
+                    <option value={key} key={key}>{labelFor(key)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Y AXIS
+                <select value={surfaceYAxis} onChange={(event) => setSurfaceYAxis(event.target.value)}>
+                  {Object.keys(design).filter((key) => !["heat_load", "ambient_temperature"].includes(key)).map((key) => (
+                    <option value={key} key={key}>{labelFor(key)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                RESPONSE
+                <select value={surfaceResponse} onChange={(event) => setSurfaceResponse(event.target.value)}>
+                  <option value="t_max">Maximum temperature</option>
+                  <option value="thermal_resistance">Thermal resistance</option>
+                  <option value="pressure_drop">Pressure drop</option>
+                  <option value="mass">Mass</option>
+                </select>
+              </label>
             </div>
+            <ResponseSurface data={surfaceData} />
           </section>
           <aside className="twin-results">
             <article>
@@ -2129,10 +2570,7 @@ function ModuleView({
             <span className="tag">SOLID</span>
           </div>
           <div className="cad-stage">
-            <div className="cad-sink">
-              <HeatSink count={12} />
-              <i className="base" />
-            </div>
+            <ThreeHeatSink design={cadDesign} />
             <span className="axis x">X</span>
             <span className="axis y">Y</span>
             <span className="axis z">Z</span>

@@ -25,6 +25,48 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
     """RQ entrypoint. Validation is intentionally repeated inside the worker process."""
     repository = ArtifactRepository()
     _progress(5, "validating_input")
+    if task == "doe":
+        from app.domain.models import DoeRequest
+        from app.services.doe import generate_doe
+
+        request = DoeRequest.model_validate(payload)
+        _progress(25, "generating_doe")
+        factors, matrix = generate_doe(request)
+        dataset_version = repository.save_dataset(
+            matrix, {"kind": "doe", "method": request.method, "seed": request.seed}
+        )
+        _progress(100, "completed")
+        return {"method": request.method, "seed": request.seed, "runs": len(matrix), "factors": [factor.name for factor in factors], "matrix": matrix, "dataset_version": dataset_version}
+    if task == "simulation":
+        from app.domain.models import BatchSimulationRequest
+        from app.services.simulator import SIMULATOR_VERSION, simulate
+
+        request = BatchSimulationRequest.model_validate(payload)
+        records = []
+        for index, design in enumerate(request.designs):
+            _progress(10 + round(80 * (index + 1) / len(request.designs)), "running_physics_simulation")
+            result = simulate(design, request.noise_std, request.seed + index)
+            records.append({"run": index + 1, **design.model_dump(), **result.model_dump()})
+        dataset_version = repository.save_dataset(records, {"kind": "physics_simulation", "simulator_version": SIMULATOR_VERSION, "seed": request.seed, "noise_std": request.noise_std, "not_cfd_result": True})
+        _progress(100, "completed")
+        return {"count": len(records), "records": records, "dataset_version": dataset_version, "simulator_version": SIMULATOR_VERSION, "not_cfd_result": True}
+    if task == "training":
+        from app.domain.phase1 import TrainingRequest
+        from app.services.surrogates import train_surrogates
+
+        request = TrainingRequest.model_validate(payload)
+        _progress(20, "training_and_cross_validating_surrogates")
+        model_id, metrics, selected = train_surrogates(request.records, request.seed, repository)
+        _progress(100, "completed")
+        return {"model_id": model_id, "model_metrics": metrics, "selected_models": selected}
+    if task == "optimization":
+        from app.domain.phase1 import OptimizationRequest
+        from app.services.optimization import optimize
+
+        _progress(20, "running_constrained_optimization")
+        result = optimize(OptimizationRequest.model_validate(payload), repository)
+        _progress(100, "completed")
+        return result
     if task == "phase1":
         from app.domain.phase1 import Phase1WorkflowRequest
         from app.services.workflow import run_phase1
@@ -39,6 +81,16 @@ def execute_job(task: str, payload: dict[str, Any]) -> dict[str, Any]:
 
         _progress(15, "bayesian_learning_and_cad")
         result = run_phase2(Phase2WorkflowRequest.model_validate(payload), repository)
+        _progress(100, "completed")
+        return result
+    if task == "agent":
+        from app.domain.agent import EngineeringAgentRequest
+        from app.services.engineering_agent import execute_engineering_agent
+
+        _progress(15, "planning_engineering_tools")
+        result = execute_engineering_agent(
+            EngineeringAgentRequest.model_validate(payload), repository
+        )
         _progress(100, "completed")
         return result
     if task == "cae":

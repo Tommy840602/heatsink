@@ -29,6 +29,7 @@ class CadGenerationRequest(BaseModel):
 
 
 class Phase2WorkflowRequest(BaseModel):
+    project_id: str | None = None
     model_id: str
     dataset_version: str
     acquisition: Literal["EI", "PI", "UCB"] = "EI"

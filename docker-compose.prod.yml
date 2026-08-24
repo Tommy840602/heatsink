@@ -1,0 +1,53 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${THERMOFORM_POSTGRES_PASSWORD:?Set THERMOFORM_POSTGRES_PASSWORD}
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  migration:
+    environment:
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:?Set THERMOFORM_POSTGRES_PASSWORD}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
+
+  backend:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
+    environment:
+      THERMOFORM_ENV: production
+      THERMOFORM_LOG_LEVEL: INFO
+      THERMOFORM_AUTO_CREATE_SCHEMA: "false"
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:?Set THERMOFORM_POSTGRES_PASSWORD}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
+      THERMOFORM_CORS_ORIGINS: ${THERMOFORM_CORS_ORIGINS:?Set THERMOFORM_CORS_ORIGINS}
+    restart: unless-stopped
+
+  worker:
+    environment:
+      THERMOFORM_ENV: production
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:?Set THERMOFORM_POSTGRES_PASSWORD}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
+    restart: unless-stopped
+
+  watchdog:
+    environment:
+      THERMOFORM_ENV: production
+    restart: unless-stopped
+
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+    restart: unless-stopped
+
+  nginx:
+    restart: unless-stopped
+
+  prometheus:
+    restart: unless-stopped
+
+  prometheus-2:
+    restart: unless-stopped
+
+  grafana:
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${THERMOFORM_GRAFANA_ADMIN_PASSWORD:?Set THERMOFORM_GRAFANA_ADMIN_PASSWORD}
+    restart: unless-stopped

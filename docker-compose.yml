@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${THERMOFORM_POSTGRES_DB:-thermoform}
+      POSTGRES_USER: ${THERMOFORM_POSTGRES_USER:-thermoform}
+      POSTGRES_PASSWORD: ${THERMOFORM_POSTGRES_PASSWORD:-thermoform-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${THERMOFORM_POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7.4-alpine
     command: redis-server --appendonly yes
@@ -10,12 +26,35 @@ services:
       timeout: 3s
       retries: 10
 
+  migration:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${THERMOFORM_PYPI_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR_URL: ${THERMOFORM_DEBIAN_MIRROR_URL:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR_URL: ${THERMOFORM_DEBIAN_SECURITY_MIRROR_URL:-http://deb.debian.org/debian-security}
+    command: alembic upgrade head
+    environment:
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:-thermoform-local-only}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
+      THERMOFORM_AUTO_CREATE_SCHEMA: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${THERMOFORM_PYPI_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR_URL: ${THERMOFORM_DEBIAN_MIRROR_URL:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR_URL: ${THERMOFORM_DEBIAN_SECURITY_MIRROR_URL:-http://deb.debian.org/debian-security}
+        INSTALL_FREECAD: "true"
     environment:
       THERMOFORM_ENV: development
-      THERMOFORM_CORS_ORIGINS: http://localhost:3000
+      THERMOFORM_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080
       THERMOFORM_REDIS_URL: redis://redis:6379/0
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:-thermoform-local-only}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
+      THERMOFORM_AUTO_CREATE_SCHEMA: "false"
       THERMOFORM_ARTIFACT_DIR: /data
       THERMOFORM_HEARTBEAT_STALE_SECONDS: 120
       THERMOFORM_WATCHDOG_STALE_SECONDS: 180
@@ -26,6 +65,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
@@ -33,16 +74,25 @@ services:
       retries: 5
 
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${THERMOFORM_PYPI_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR_URL: ${THERMOFORM_DEBIAN_MIRROR_URL:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR_URL: ${THERMOFORM_DEBIAN_SECURITY_MIRROR_URL:-http://deb.debian.org/debian-security}
+        INSTALL_FREECAD: "true"
     command: rq worker --url redis://redis:6379/0 thermoform
     environment:
       THERMOFORM_REDIS_URL: redis://redis:6379/0
       THERMOFORM_ARTIFACT_DIR: /data
+      THERMOFORM_DATABASE_URL: postgresql+psycopg://${THERMOFORM_POSTGRES_USER:-thermoform}:${THERMOFORM_POSTGRES_PASSWORD:-thermoform-local-only}@postgres:5432/${THERMOFORM_POSTGRES_DB:-thermoform}
     volumes:
       - thermoform-artifacts:/data
     depends_on:
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
 
   watchdog:
     build: ./backend
@@ -372,13 +422,55 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+        NPM_CONFIG_REGISTRY: ${THERMOFORM_NPM_REGISTRY:-https://registry.npmjs.org}
     ports:
       - "3000:3000"
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  postgres-backup:
+    image: postgres:17-alpine
+    profiles: ["ops"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${THERMOFORM_POSTGRES_DB:-thermoform}
+      PGUSER: ${THERMOFORM_POSTGRES_USER:-thermoform}
+      PGPASSWORD: ${THERMOFORM_POSTGRES_PASSWORD:-thermoform-local-only}
+    volumes:
+      - ./scripts/backup_postgres.sh:/usr/local/bin/backup-postgres:ro
+      - postgres-backups:/backups
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup-postgres"]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
+  postgres-data:
+  postgres-backups:
   redis-data:
   thermoform-artifacts:
   prometheus-data:

@@ -59,16 +59,26 @@ export const api = {
   getJob,
   cancelJob,
   health: () => request("/health"),
+  overview: (projectId) =>
+    request(`/overview${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
+  listProjects: () => request("/projects"),
+  createProject: (name, description = "") =>
+    request("/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    }),
+  saveDesign: (projectId, name, parameters) =>
+    request(`/projects/${projectId}/designs`, {
+      method: "POST",
+      body: JSON.stringify({ name, parameters }),
+    }),
   validateDesign: (design) =>
     request("/designs/validate", {
       method: "POST",
       body: JSON.stringify(design),
     }),
-  generateDoe: (method, runs) =>
-    request("/doe/generate", {
-      method: "POST",
-      body: JSON.stringify({ method, runs, seed: 42 }),
-    }),
+  generateDoe: (method, runs, onStatus) =>
+    runJob("doe", { method, runs, seed: 42 }, onStatus),
   predict: (design) =>
     request("/simulations/predict", {
       method: "POST",
@@ -78,6 +88,7 @@ export const api = {
     runJob(
       "phase1",
       {
+        project_id: window.localStorage.getItem("thermoform:project-id") || null,
         method,
         runs,
         seed: 42,
@@ -92,10 +103,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ design }),
     }),
+  responseSurface: (modelId, xAxis, yAxis, response, fixedDesign, resolution = 24) =>
+    request(`/models/${modelId}/surface`, {
+      method: "POST",
+      body: JSON.stringify({
+        x_axis: xAxis,
+        y_axis: yAxis,
+        response,
+        fixed_design: fixedDesign,
+        resolution,
+      }),
+    }),
+  executeAgent: (instruction, context = {}, onStatus) =>
+    runJob("agent", { instruction, context, seed: 42 }, onStatus),
   runPhase2: (modelId, datasetVersion, acquisition = "EI", iterations = 3, onStatus) =>
     runJob(
       "phase2",
       {
+        project_id: window.localStorage.getItem("thermoform:project-id") || null,
         model_id: modelId,
         dataset_version: datasetVersion,
         acquisition,

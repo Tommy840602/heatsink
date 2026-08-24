@@ -39,8 +39,8 @@ class FactorRange(BaseModel):
 
 
 class DoeRequest(BaseModel):
-    method: Literal["LHS", "CCD", "BBD"] = "LHS"
-    runs: int = Field(default=64, ge=30, le=100)
+    method: Literal["Full Factorial", "Fractional Factorial", "LHS", "CCD", "BBD"] = "LHS"
+    runs: int = Field(default=64, ge=8, le=256)
     seed: int = Field(default=42, ge=0)
     factors: list[FactorRange] | None = None
 
@@ -51,7 +51,7 @@ class DoeResponse(BaseModel):
     runs: int
     factors: list[str]
     matrix: list[dict[str, float | int]]
-    dataset_version: str = "v13"
+    dataset_version: str
 
 
 class BatchSimulationRequest(BaseModel):

@@ -47,7 +47,10 @@ def test_phase1_workflow_persists_traceable_model_and_optimizes(tmp_path):
     }
     assert result["optimization"]["recommended"] is not None
     assert result["traceability"]["physics_result_is_cfd"] is False
-    assert (tmp_path / "experiments" / f'{result["dataset_version"]}.json').exists()
+    assert (tmp_path / "experiments" / f'{result["dataset_version"]}.parquet').exists()
+    assert (tmp_path / "experiments" / f'{result["dataset_version"]}.metadata.json').exists()
+    model_metadata = tmp_path / "models" / result["model_id"] / "metadata.json"
+    assert "NaN" not in model_metadata.read_text(encoding="utf-8")
 
     bundle = repository.load_model(result["model_id"])
     prediction = predict_design(

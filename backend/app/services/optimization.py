@@ -3,8 +3,8 @@ from typing import Any
 import numpy as np
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import ElementwiseProblem
-from pymoo.optimize import minimize
-from scipy.optimize import differential_evolution
+from pymoo.optimize import minimize as pymoo_minimize
+from scipy.optimize import differential_evolution, minimize as scipy_minimize
 
 from app.domain.phase1 import FEATURES, OptimizationRequest
 from app.repositories.artifacts import ArtifactRepository
@@ -15,8 +15,24 @@ LOWER = np.asarray([20.0, 0.3, 20.0, 1.0, 0.5])
 UPPER = np.asarray([60.0, 1.0, 60.0, 4.0, 5.0])
 
 
-def _physical_row(vector: np.ndarray) -> np.ndarray:
-    row = np.clip(np.asarray(vector, dtype=float), LOWER, UPPER)
+def _request_bounds(request: OptimizationRequest) -> tuple[np.ndarray, np.ndarray]:
+    if not request.factors:
+        return LOWER, UPPER
+    configured = {factor.name: factor for factor in request.factors}
+    if set(configured) != set(FEATURES):
+        raise ValueError("Optimization factors must define all five canonical features")
+    return (
+        np.asarray([configured[name].lower for name in FEATURES], dtype=float),
+        np.asarray([configured[name].upper for name in FEATURES], dtype=float),
+    )
+
+
+def _physical_row(
+    vector: np.ndarray,
+    lower: np.ndarray = LOWER,
+    upper: np.ndarray = UPPER,
+) -> np.ndarray:
+    row = np.clip(np.asarray(vector, dtype=float), lower, upper)
     row[0] = round(row[0])
     return row
 
@@ -34,44 +50,102 @@ def _predict(bundle: dict[str, Any], row: np.ndarray) -> dict[str, float]:
 
 class SurrogateOptimizationProblem(ElementwiseProblem):
     def __init__(self, bundle: dict[str, Any], request: OptimizationRequest):
-        super().__init__(n_var=len(FEATURES), n_obj=len(request.objectives), n_ieq_constr=2, xl=LOWER, xu=UPPER)
+        self.lower, self.upper = _request_bounds(request)
+        super().__init__(n_var=len(FEATURES), n_obj=len(request.objectives), n_ieq_constr=3 if request.mass_limit is not None else 2, xl=self.lower, xu=self.upper)
         self.bundle = bundle
         self.request = request
 
     def _evaluate(self, x, out, *args, **kwargs):
-        row = _physical_row(x)
+        row = _physical_row(x, self.lower, self.upper)
         predicted = _predict(self.bundle, row)
         out["F"] = [predicted[name] for name in self.request.objectives]
-        out["G"] = [
+        constraints = [
             predicted["t_max"] - self.request.t_max_limit,
             predicted["pressure_drop"] - self.request.pressure_drop_limit,
         ]
+        if self.request.mass_limit is not None:
+            constraints.append(predicted["mass"] - self.request.mass_limit)
+        out["G"] = constraints
 
 
 def optimize(request: OptimizationRequest, repository: ArtifactRepository | None = None) -> dict[str, Any]:
     repository = repository or ArtifactRepository()
     bundle = repository.load_model(request.model_id)
+    lower, upper = _request_bounds(request)
 
     if request.mode == "single":
         objective = request.objectives[0]
 
         def score(vector: np.ndarray) -> float:
-            row = _physical_row(vector)
+            row = _physical_row(vector, lower, upper)
             predicted = _predict(bundle, row)
             penalty = max(predicted["t_max"] - request.t_max_limit, 0.0) * 1e3
             penalty += max(predicted["pressure_drop"] - request.pressure_drop_limit, 0.0) * 1e3
+            if request.mass_limit is not None:
+                penalty += max(predicted["mass"] - request.mass_limit, 0.0) * 1e3
             return predicted[objective] + penalty
 
-        result = differential_evolution(
-            score,
-            bounds=list(zip(LOWER, UPPER, strict=True)),
-            seed=request.seed,
-            maxiter=request.generations,
-            popsize=max(5, request.population_size // len(FEATURES)),
-            polish=True,
-            workers=1,
-        )
-        row = _physical_row(result.x)
+        bounds = list(zip(lower, upper, strict=True))
+        global_result = None
+        if request.algorithm in {"auto", "differential_evolution"}:
+            global_result = differential_evolution(
+                score,
+                bounds=bounds,
+                seed=request.seed,
+                maxiter=request.generations,
+                popsize=max(5, request.population_size // len(FEATURES)),
+                polish=request.algorithm == "differential_evolution",
+                workers=1,
+            )
+
+        local_result = None
+        if request.algorithm in {"auto", "slsqp"}:
+            start = global_result.x if global_result is not None else (lower + upper) / 2.0
+
+            def thermal_constraint(vector: np.ndarray) -> float:
+                return request.t_max_limit - _predict(bundle, _physical_row(vector, lower, upper))["t_max"]
+
+            def pressure_constraint(vector: np.ndarray) -> float:
+                return request.pressure_drop_limit - _predict(bundle, _physical_row(vector, lower, upper))["pressure_drop"]
+
+            constraints = [
+                {"type": "ineq", "fun": thermal_constraint},
+                {"type": "ineq", "fun": pressure_constraint},
+            ]
+            if request.mass_limit is not None:
+                constraints.append(
+                    {
+                        "type": "ineq",
+                        "fun": lambda vector: request.mass_limit
+                        - _predict(bundle, _physical_row(vector, lower, upper))["mass"],
+                    }
+                )
+
+            local_result = scipy_minimize(
+                lambda vector: _predict(bundle, _physical_row(vector, lower, upper))[objective],
+                start,
+                method="SLSQP",
+                bounds=bounds,
+                constraints=constraints,
+                options={"maxiter": max(100, request.generations * 5), "ftol": 1e-9},
+            )
+
+        candidates = [result for result in (global_result, local_result) if result is not None]
+        feasible_candidates = []
+        for candidate in candidates:
+            candidate_row = _physical_row(candidate.x, lower, upper)
+            candidate_prediction = _predict(bundle, candidate_row)
+            if (
+                candidate_prediction["t_max"] <= request.t_max_limit + 1e-6
+                and candidate_prediction["pressure_drop"] <= request.pressure_drop_limit + 1e-6
+                and (
+                    request.mass_limit is None
+                    or candidate_prediction["mass"] <= request.mass_limit + 1e-6
+                )
+            ):
+                feasible_candidates.append(candidate)
+        result = min(feasible_candidates or candidates, key=lambda candidate: score(candidate.x))
+        row = _physical_row(result.x, lower, upper)
         predicted = _predict(bundle, row)
         return {
             "mode": "single",
@@ -80,11 +154,16 @@ def optimize(request: OptimizationRequest, repository: ArtifactRepository | None
             "pareto": [],
             "evaluations": int(result.nfev),
             "success": bool(result.success),
+            "algorithm": (
+                "differential_evolution+slsqp"
+                if request.algorithm == "auto"
+                else request.algorithm
+            ),
         }
 
     problem = SurrogateOptimizationProblem(bundle, request)
     algorithm = NSGA2(pop_size=request.population_size, eliminate_duplicates=True)
-    result = minimize(
+    result = pymoo_minimize(
         problem,
         algorithm,
         ("n_gen", request.generations),

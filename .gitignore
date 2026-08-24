@@ -7,6 +7,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 backend/data/
+/data/*
+!/data/.gitkeep
+/frontend/test-results/
+/frontend/playwright-report/
 /.pnp
 .pnp.*
 .yarn/*

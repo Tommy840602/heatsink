@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 import numpy as np
-from pyDOE3 import bbdesign, ccdesign, lhs
+from pyDOE3 import bbdesign, ccdesign, fracfact, fullfact, lhs
 
 from app.domain.models import DoeRequest, FactorRange
 
@@ -50,10 +50,26 @@ def _bbd(_: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | in
     return _matrix_to_records(matrix, factors)
 
 
+def _full_factorial(_: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
+    matrix = fullfact([2] * len(factors))
+    return _matrix_to_records(matrix * 2.0 - 1.0, factors)
+
+
+def _fractional_factorial(_: DoeRequest, factors: list[FactorRange]) -> list[dict[str, float | int]]:
+    if len(factors) != 5:
+        raise ValueError("Fractional Factorial currently requires the five canonical heat-sink factors")
+    # Resolution V half fraction: E = A*B*C*D. Main effects are not aliased
+    # with two-factor interactions.
+    matrix = fracfact("a b c d abcd")
+    return _matrix_to_records(matrix, factors)
+
+
 GENERATORS: dict[str, Callable[[DoeRequest, list[FactorRange]], list[dict[str, float | int]]]] = {
     "LHS": _lhs,
     "CCD": _ccd,
     "BBD": _bbd,
+    "Full Factorial": _full_factorial,
+    "Fractional Factorial": _fractional_factorial,
 }
 
 

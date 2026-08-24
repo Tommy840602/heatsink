@@ -72,6 +72,22 @@ Phase 3.32 adds an AWS-independent production foundation for RKE2, Rook-managed 
 
 > The built-in physics simulator is a reduced-order engineering model, not CFD or CAE.
 
+> Production authority is the fully open-source RKE2 + Rook/Ceph + OpenBao + Keycloak + Harbor stack in `infra/self-hosted`. Earlier AWS material is retained only as historical reference and is not part of the supported production path.
+
+## Original specification completion matrix
+
+| Scope | Implemented evidence |
+|---|---|
+| Phase 1 | Configurable Full/Fractional Factorial, CCD, BBD, LHS; deterministic/noisy physics; ANOVA, effects, interactions, correlation and residual plots; RSM/RF/XGBoost/GPR lifecycle; holdout + CV metrics; SciPy DE/SLSQP and NSGA-II |
+| Phase 2 | EI/PI/UCB feedback loop, real headless FreeCAD STEP/STL/FCStd generation in Compose, Three.js heat-sink preview, calculated response surface and contour |
+| Phase 3 | CAD → watertight STL → OpenFOAM CHT mesh/BC/solver/parser/checkpoint chain; only converged, mesh-independent results enter a versioned CFD Parquet dataset |
+| Phase 4 | Bounded natural-language engineering agent with `run_doe`, `run_simulation`, `train_surrogate`, `evaluate_models`, `optimize_design`, `compare_designs`, and `generate_cad`; arbitrary code execution is disabled and every run is persisted |
+| Data/API | PostgreSQL projects, versioned designs, experiment/simulation/model/optimization metadata; immutable Zstd Parquet and job/model/CAD artifacts; request/project/job/model/dataset/status/error metadata |
+| Runtime | React JavaScript + FastAPI separation, Redis/RQ + result endpoint + WebSocket, Alembic, Nginx, health/readiness, JSON logging, seed data and checksum-protected backups |
+| Verification | Unit, integration, contract, browser E2E, Compose health, real PostgreSQL migration/persistence, real FreeCAD export, OpenFOAM environment/mesh/solver acceptance gates |
+
+The implementation uses `/api/v1` as the stable versioned form of the `/api` routes in the original document.
+
 ## Architecture
 
 ```text
@@ -85,7 +101,7 @@ Browser
                  ├─ Thanos Receive RF=3 + Store/Query/Compactor (:10909–:10913/:10902)
                  ├─ Alertmanager HA pair + authenticated delivery (:9093/:9095)
                  ├─ provisioned Grafana recovery dashboard (:3001)
-                 ├─ design validation + standard CCD / BBD / LHS
+                 ├─ design validation + Full/Fractional Factorial / CCD / BBD / LHS
                  ├─ deterministic thermal, pressure-drop, and mass simulation
                  ├─ quadratic RSM, ANOVA, and residual diagnostics
                  ├─ RSM / Random Forest / XGBoost / GPR evaluation
@@ -107,6 +123,18 @@ backend/    FastAPI, Pydantic, pyDOE3, SciPy, scikit-learn, XGBoost, pymoo
 ```bash
 docker compose up --build
 ```
+
+Open <http://localhost:8080> for the Nginx-integrated application. Alembic migrations run before the API and worker start.
+
+Production Compose remains supported (it is not replaced by Kubernetes):
+
+```bash
+cp .env.production.example .env.production
+# replace every placeholder secret and hostname
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+The multi-node RKE2/Ceph/OpenBao/Keycloak/Harbor deployment is for failure-domain HA. It requires operator-supplied servers, DNS/TLS, explicit raw Ceph disks, and external PostgreSQL/Valkey; the repository deliberately cannot fabricate those physical resources.
 
 Start the pinned OpenFOAM worker as an explicit CAE profile:
 
@@ -150,6 +178,27 @@ Frontend, in another terminal:
 cd frontend
 npm ci
 npm run dev
+```
+
+Reproduce the interview demo with seed 42, or run each engineering stage independently:
+
+```bash
+python scripts/seed_demo.py
+python scripts/generate_doe.py --method LHS --runs 48 --seed 42
+python scripts/run_simulations.py DATASET_VERSION --seed 42
+python scripts/train_models.py DATASET_VERSION --seed 42
+python scripts/optimize.py MODEL_ID --mode multi --seed 42
+```
+
+Back up PostgreSQL and immutable engineering artifacts:
+
+```bash
+docker compose --profile ops run --rm postgres-backup
+python scripts/backup_engineering_artifacts.py backup \
+  --source data --output /secure/backups/thermoform-artifacts.tar.gz
+python scripts/backup_engineering_artifacts.py restore \
+  --archive /secure/backups/thermoform-artifacts.tar.gz \
+  --target /empty/restore/data
 ```
 
 Run the isolated HA and alert-routing drill (uses only `19090`-series loopback ports, then removes its own Compose project and volume):
@@ -232,22 +281,30 @@ Copy each `.env.example` to `.env` when overriding local defaults.
 |---|---|---|
 | `GET` | `/api/v1/health` | Service readiness and simulator version |
 | `GET` | `/api/v1/overview` | Dashboard summary |
+| `POST/GET` | `/api/v1/projects` | Create/list persisted projects and design spaces |
+| `GET/PATCH/DELETE` | `/api/v1/projects/{project_id}` | Read/update/archive one project |
+| `POST` | `/api/v1/designs` | Create an immutable versioned project design |
 | `POST` | `/api/v1/designs/validate` | Validate engineering bounds |
-| `POST` | `/api/v1/doe/generate` | Generate CCD, BBD, or LHS matrix |
+| `POST` | `/api/v1/doe/generate` | Generate Full/Fractional Factorial, CCD, BBD, or LHS matrix |
 | `POST` | `/api/v1/simulations/predict` | Predict one design |
 | `POST` | `/api/v1/simulations/run` | Simulate a reproducible batch |
 | `POST` | `/api/v1/analysis/run` | Fit quadratic RSM; return ANOVA and diagnostics |
 | `POST` | `/api/v1/models/train` | Train and cross-validate four surrogate families |
 | `GET` | `/api/v1/models/{model_id}/metrics` | Read immutable model metrics |
 | `POST` | `/api/v1/models/{model_id}/predict` | Predict with the selected persisted surrogate |
+| `POST` | `/api/v1/models/{model_id}/surface` | Calculated surface, contour, uncertainty, current and optimal points |
 | `POST` | `/api/v1/optimizations/run` | Run single- or multi-objective optimization |
 | `POST` | `/api/v1/workflows/phase1/run` | Execute the complete Phase 1 closed loop |
 | `POST` | `/api/v1/bayesian/propose` | Rank the next experiment with EI, PI, or UCB |
 | `POST` | `/api/v1/workflows/phase2/run` | Propose, simulate, update, retrain, and prepare CAD |
 | `POST` | `/api/v1/cad/generate` | Generate traceable FreeCAD script and CAD artifacts |
+| `GET` | `/api/v1/cad/{cad_id}` | Read immutable STEP/STL metadata |
 | `GET` | `/api/v1/cad/{cad_id}/artifacts/{filename}` | Download a generated CAD artifact |
-| `POST` | `/api/v1/jobs` | Queue Phase 1, Phase 2, `cae`, `cae_mesh`, `cae_smoke`, `cae_solve`, `cae_campaign`, `cae_mesh_study`, or `cae_benchmark` work and return `202` |
+| `POST` | `/api/v1/jobs` | Queue DOE, simulation, training, optimization, Phase 1/2/4 or CAE work and return `202` |
 | `GET` | `/api/v1/jobs/{job_id}` | Poll queue state and retrieve a completed result |
+| `GET` | `/api/v1/jobs/{job_id}/result` | Retrieve only a completed result |
+| `WS` | `/ws/jobs/{job_id}` | Stream job progress and canonical job status |
+| `POST` | `/api/v1/agent/execute` | Execute a bounded, auditable seven-tool engineering plan |
 | `POST` | `/api/v1/jobs/{job_id}/cancel` | Request cooperative cancellation; active CAE campaigns stop after the current checkpoint |
 | `POST` | `/api/v1/cae/cases` | Prepare an OpenFOAM case synchronously for integration use |
 | `GET` | `/api/v1/cae/campaigns` | List newest-first immutable CAE campaign summaries |

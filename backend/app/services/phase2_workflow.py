@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import os
 from typing import Any
 
 from app.domain.models import DesignParameters
@@ -13,6 +14,7 @@ from app.services.bayesian import propose
 from app.services.cad import generate_cad
 from app.services.simulator import SIMULATOR_VERSION, simulate
 from app.services.surrogates import records_to_xy, train_surrogates
+from app.services.metadata import persist_workflow_metadata
 
 
 def _refit_gprs(bundle: dict[str, Any], records: list[dict[str, Any]]) -> None:
@@ -90,7 +92,19 @@ def run_phase2(
         "iterations": request.iterations,
         "seed": request.seed,
     }
-    return {
+    traceability = {
+        **fingerprint,
+        "experiment_count": len(records),
+        "noise_std": request.noise_std,
+        "objectives": ["t_max"],
+        "constraints": {"t_max_limit": 80.0, "pressure_drop_limit": 35.0},
+        "simulator_version": SIMULATOR_VERSION,
+        "code_version": os.getenv("THERMOFORM_GIT_COMMIT", "development"),
+        "completed_at": datetime.now(UTC).isoformat(),
+        "physics_result_is_cfd": False,
+        "cad_step_requires_freecad": True,
+    }
+    result = {
         "workflow_id": repository.version(fingerprint, "phase2"),
         "status": "completed",
         "acquisition": request.acquisition,
@@ -104,10 +118,25 @@ def run_phase2(
         "best_design": best_design,
         "best_response": best_response,
         "cad": cad,
-        "traceability": {
-            **fingerprint,
-            "completed_at": datetime.now(UTC).isoformat(),
-            "physics_result_is_cfd": False,
-            "cad_step_requires_freecad": True,
-        },
+        "traceability": traceability,
     }
+    persist_workflow_metadata(
+        project_id=request.project_id,
+        method=f"Bayesian Optimization ({request.acquisition})",
+        seed=request.seed,
+        noise_std=request.noise_std,
+        simulator_version=SIMULATOR_VERSION,
+        dataset_version=dataset_version,
+        model_id=model_id,
+        model_metrics=metrics,
+        optimization={
+            "mode": "bayesian",
+            "objectives": ["t_max"],
+            "recommended": {"design": best_design, "responses": best_response},
+            "pareto": [],
+            "acquisition": request.acquisition,
+        },
+        traceability=traceability,
+        repository=repository,
+    )
+    return result

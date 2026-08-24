@@ -27,7 +27,11 @@ def test_cae_runtime_requirements_contract():
     response = client.get("/api/v1/cae/runtime-requirements")
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    meta = payload.pop("meta")
+    assert meta["request_id"].startswith("req_")
+    assert payload.pop("error") is None
+    assert payload == {
         "target_distribution": "OpenCFD OpenFOAM v2312",
         "architecture": "linux/amd64",
         "queue": "thermoform-cae",

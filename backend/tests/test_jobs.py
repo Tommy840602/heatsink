@@ -68,12 +68,35 @@ def test_job_api_returns_202_and_exposes_completed_result():
         assert finished.status_code == 200
         assert finished.json()["result"]["results_available"] is False
 
+        result = client.get("/api/v1/jobs/job_test123/result")
+        assert result.status_code == 200
+        payload = result.json()
+        assert payload.pop("meta")["job_id"] == "job_test123"
+        assert payload.pop("error") is None
+        assert payload == {
+                "job_id": "job_test123",
+                "status": "completed",
+                "result": {"case_generated": True, "results_available": False},
+            }
+
         cancelled = client.post("/api/v1/jobs/job_test123/cancel")
         assert cancelled.status_code == 202
         assert cancelled.json()["cancel_requested"] is True
         assert cancelled.json()["stage"] == "cancel_requested"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_job_websocket_exposes_canonical_completed_status(monkeypatch):
+    from app.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "get_job_queue", lambda: FakeQueue())
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/jobs/job_test123") as websocket:
+            snapshot = websocket.receive_json()
+            assert snapshot["status"] == "finished"
+            assert snapshot["canonical_status"] == "completed"
+            assert snapshot["result"]["case_generated"] is True
 
 
 def test_cae_benchmark_isolated_queue_routing():

@@ -219,6 +219,11 @@ def run_openfoam_campaign(
     result = {
         "campaign_id": campaign_id,
         "case_id": expected_case_id,
+        "design": request.design.model_dump(),
+        "boundary_conditions": {
+            "heat_load_w": request.heat_load_w,
+            "ambient_temperature_c": request.ambient_temperature_c,
+        },
         "mesh_profile": request.mesh_profile,
         "study_fingerprint": repository.version(
             {

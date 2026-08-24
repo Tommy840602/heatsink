@@ -1,18 +1,19 @@
+import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.domain.phase2 import (
     BayesianProposalRequest,
     CadGenerationRequest,
     Phase2WorkflowRequest,
-    Phase2WorkflowResponse,
 )
 from app.repositories.artifacts import ArtifactRepository
 from app.services.bayesian import propose
 from app.services.cad import generate_cad
-from app.services.phase2_workflow import run_phase2
+from app.domain.jobs import JobSnapshot
+from app.services.jobs import JobQueue, get_job_queue
 
 
 router = APIRouter(prefix="/api/v1")
@@ -44,9 +45,15 @@ def cad_artifact(cad_id: str, filename: str) -> FileResponse:
     return FileResponse(path, filename=filename)
 
 
-@router.post("/workflows/phase2/run", response_model=Phase2WorkflowResponse)
-def phase2_workflow(request: Phase2WorkflowRequest) -> Phase2WorkflowResponse:
+@router.get("/cad/{cad_id}")
+def cad_metadata(cad_id: str) -> dict[str, Any]:
     try:
-        return Phase2WorkflowResponse(**run_phase2(request, repository))
+        path = repository.cad_artifact_path(cad_id, "metadata.json")
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Dataset or model artifact not found") from exc
+        raise HTTPException(status_code=404, detail="CAD artifact not found") from exc
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@router.post("/workflows/phase2/run", response_model=JobSnapshot, status_code=status.HTTP_202_ACCEPTED)
+def phase2_workflow(request: Phase2WorkflowRequest, queue: JobQueue = Depends(get_job_queue)) -> JobSnapshot:
+    return JobSnapshot(**queue.enqueue("phase2", request.model_dump(mode="json")))
